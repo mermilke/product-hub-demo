@@ -1,0 +1,40 @@
+/* Demo palette: dragon-scale emerald replaces the app's teal "live / selected / PM tools" hue. Red stays the
+   action colour and amber still means work in progress. Same selectors as app.css's theme blocks, loaded
+   after it, so these win. Contrast (WCAG AA): ink on white 5.7:1, dark ink on the dark surface 8:1, label
+   ink on the emerald fill 5.2:1, focus ring well over 3:1. */
+:root, :root[data-theme="light"] {
+  --ok: #1f9d63; --ok-ink: #13754a; --ok-tint: #e3f4ea; --focus-ring: #13754a; --focus-tint: #e3f4ea; --on-ok: #0c1622;
+}
+:root[data-theme="dark"] {
+  --ok: #1f9d63; --ok-ink: #3cc585; --ok-tint: #10261b; --focus-ring: #3cc585; --focus-tint: #10261b; --on-ok: #0c1622;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --ok: #1f9d63; --ok-ink: #3cc585; --ok-tint: #10261b; --focus-ring: #3cc585; --focus-tint: #10261b; --on-ok: #0c1622;
+  }
+}
+@media print {
+  :root:not([data-theme]), :root[data-theme="dark"], :root[data-theme="light"] { --ok-ink: #13754a; --ok-tint: #e3f4ea; --focus-ring: #13754a; }
+}
+
+/* The demo's own mark is an image, not the app's inline SVG — size it the same and keep the tap animation. */
+.brand-mark img { width: 57px; height: 57px; display: block; }
+.signin-card .mark img, #signinMark img { width: 78px; height: 78px; display: block; }
+
+/* Demo-only: the "fictional company" strip above the app. Same amber as the app's work-in-progress fill. */
+.demo-banner {
+  position: relative;
+  z-index: 260;
+  background: var(--pending-fill, #f2b233);
+  color: #1a1300;
+  font: 600 19.5px/1.4 Inter, system-ui, sans-serif;
+  text-align: center;
+  padding: 9px 24px;
+}
+.demo-elsewhere { max-width: 840px; margin: 12vh auto; padding: 0 24px; font: 24px/1.55 Inter, system-ui, sans-serif; color: var(--ink); }
+.demo-elsewhere h1 { font-size: 36px; margin: 0 0 18px; }
+@media (max-width: 620px) {
+  .demo-banner { font-size: 18px; padding: 7.5px 18px; }
+}
+
+:root { --demo-scale: 1.5; font-size: 24px; }

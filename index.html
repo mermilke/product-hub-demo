@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grumbleton & Sons Hub</title>
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#151d2b">
+<link rel="icon" type="image/png" href="/icons/logo-192.png">
+<meta name="description" content="Grumbleton & Sons Hub — find product renders, spec sheets, and documents in one place.">
+<!-- Installable app (PWA): Add to Home Screen on iOS + Android shows the Grumbleton B mark, launches standalone. -->
+<link rel="manifest" href="/site.webmanifest">
+<link rel="apple-touch-icon" href="/icons/logo-512.png">
+<meta name="apple-mobile-web-app-title" content="Product Hub">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<script src="/pre-init.js"></script>
+<link rel="stylesheet" href="/app.css" media="print, (max-width: 1599.98px)">
+<link rel="stylesheet" href="/app-125.css" media="screen and (min-width: 1600px) and (max-width: 1899.98px)">
+<link rel="stylesheet" href="/app-150.css" media="screen and (min-width: 1900px)">
+<link rel="stylesheet" href="/demo/demo.css" media="print, (max-width: 1599.98px)">
+<link rel="stylesheet" href="/demo/demo-125.css" media="screen and (min-width: 1600px) and (max-width: 1899.98px)">
+<link rel="stylesheet" href="/demo/demo-150.css" media="screen and (min-width: 1900px)">
+<!-- The weights that paint first (body 400, headings/buttons 600-700). Without these the fonts are only
+     discovered after the CSSOM is built, ~450 ms later on a cold load, and every page swapped visibly. -->
+<link rel="preload" href="/fonts/inter-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/inter-600.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/inter-700.woff2" as="font" type="font/woff2" crossorigin>
+<script defer src="/pf-shared.js"></script>
+<script defer src="/demo/seed.js"></script>
+<script defer src="/demo/backend.js"></script>
+<script defer src="/demo/demo-install.js"></script><!-- demo: answers every /api and Graph call in the browser -->
+<script defer src="/app.js"></script>
+<script defer src="/demo/demo-signin.js"></script><!-- demo: pretend PM session, no Microsoft sign-in -->
+</head>
+<body class="pre-auth">
+
+<a class="skip-link" href="#content">Skip to content</a>
+
+<div id="signin">
+  <div class="signin-card">
+    <span class="mark" id="signinMark" aria-hidden="true"></span>
+    <h1 class="signin-lock"><span class="signin-name">Grumbleton</span><span class="signin-sub">Product Hub</span></h1>
+    <p>Find product renders, spec sheets, and documents — sign in with your Grumbleton account.</p>
+    <button class="ms-btn" id="signinBtn" type="button">
+      <svg class="ms-logo" viewBox="0 0 21 21" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#F25022"/><rect x="11" y="1" width="9" height="9" fill="#7FBA00"/><rect x="1" y="11" width="9" height="9" fill="#00A4EF"/><rect x="11" y="11" width="9" height="9" fill="#FFB900"/></svg>
+      Sign in with Microsoft
+    </button>
+    <div class="signin-note" id="signinNote" role="alert"></div>
+  </div>
+</div>
+
+<header class="topbar" role="banner">
+  <div class="topbar-inner">
+    <button class="brand" id="brand" type="button" title="Collapse everything / back to top">
+      <span class="brand-mark">
+        <img src="/icons/logo.png" alt="" width="38" height="38">
+      </span>
+      <span class="brand-lock">
+        <span class="brand-name">Grumbleton</span>
+        <span class="brand-sub">Product Hub</span>
+      </span>
+    </button>
+    <label class="search" role="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="searchInput" type="search" placeholder="Search a product, model, or file type…" autocomplete="off" aria-label="Search catalog">
+      <button class="search-kbd" type="button" aria-pressed="true" aria-label="Keyboard shortcut: press / to jump to search. Turn it off" title="Press / to search · click to turn off"><kbd>/</kbd></button>
+    </label>
+    <nav class="viewnav" aria-label="Views"><div class="viewtabs" role="tablist" aria-label="View">
+      <button class="vtab on" type="button" id="tab-catalog" data-view="catalog" role="tab" aria-selected="true" aria-controls="content">Find</button>
+      <button class="vtab vtab-pm-hidden" type="button" id="tab-progress" data-view="progress" role="tab" aria-selected="false" aria-controls="content" tabindex="-1">Progress</button>
+      <button class="vtab vtab-pm-hidden" type="button" id="tab-metrics" data-view="metrics" role="tab" aria-selected="false" aria-controls="content" tabindex="-1">Metrics</button>
+      <button class="vtab vtab-pm-hidden" type="button" id="tab-admin" data-view="admin" role="tab" aria-selected="false" aria-controls="content" tabindex="-1">Admin</button>
+    </div></nav>
+    <button class="bug-btn" id="bugFab" type="button" title="Report a bug or problem" aria-label="Report a bug or problem"></button>
+    <button class="theme-toggle" id="themeToggle" title="Toggle light / dark" aria-label="Toggle theme"></button>
+  </div>
+</header>
+
+<main>
+  <div id="content" tabindex="-1" role="tabpanel" aria-labelledby="tab-catalog"></div>
+</main>
+
+<div class="lb" id="lightbox" hidden>
+  <div class="lb-backdrop"></div>
+  <div class="lb-panel" role="dialog" aria-modal="true" aria-labelledby="lbTitle">
+    <div class="lb-head">
+      <span class="lb-title" id="lbTitle"></span>
+      <span class="lb-updated" id="lbUpdated"></span>
+      <!-- One primary, two secondary, everything else behind "⋯". Eight equal-weight pills said nothing
+           about what to do first and wrapped to two rows at 390px. DOM order IS the visual order in both
+           configurations (Share is hidden unless the device can share files), so focus order matches. -->
+      <button class="lb-copy lb-share" id="lbShareBtn" type="button" hidden title="Send this file to a customer"></button>
+      <a class="lb-open" id="lbOpenLink" target="_blank" rel="noopener">Open in SharePoint</a>
+      <button class="lb-copy lb-dl" id="lbDownloadBtn" type="button" title="Download this file" aria-label="Download this file"></button>
+      <span class="lb-more-wrap">
+        <button class="lb-copy lb-more" id="lbMoreBtn" type="button" aria-expanded="false" aria-controls="lbMoreMenu" title="More actions" aria-label="More actions"></button>
+        <div class="lb-more-menu" id="lbMoreMenu" hidden>
+          <button class="lb-copy lb-dl lb-dlall" id="lbDownloadAllBtn" type="button" hidden aria-label="Download all files in this set"></button>
+          <button class="lb-copy" id="lbCopyBtn" type="button" title="Copy an internal link to this resource"></button>
+          <button class="lb-copy lb-flag" id="lbFlagBtn" type="button" title="Report this file as outdated or wrong" aria-label="Flag this resource as outdated or wrong"></button>
+          <button class="lb-copy lb-manage" id="lbManageBtn" type="button" hidden title="Manage this document across products" aria-label="Manage where this document is used"></button>
+        </div>
+      </span>
+      <button class="lb-close" type="button" aria-label="Close preview">✕</button>
+    </div>
+    <div class="lb-body"></div>
+  </div>
+</div>
+
+<!-- Bug report form -->
+<div class="bugm" id="bugModal" hidden>
+  <div class="bugm-backdrop" id="bugBackdrop"></div>
+  <div class="bugm-panel" role="dialog" aria-modal="true" aria-labelledby="bugmTitle">
+    <div class="bugm-head">
+      <span class="bugm-title" id="bugmTitle">Report a problem</span>
+      <button class="bugm-close" id="bugClose" type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="bugm-body">
+      <p class="bugm-lead">Found something broken, confusing, or missing? Tell us what happened — it goes straight to the product team.</p>
+      <label class="bugm-label" for="bugText">What went wrong?</label>
+      <textarea id="bugText" class="bugm-text" rows="5" aria-required="true" aria-describedby="bugErr" placeholder="e.g. The renders for HMX 400 I won’t open, or a link goes to the wrong file…"></textarea>
+      <div class="bugm-err" id="bugErr" role="alert"></div>
+      <div class="bugm-ctx" id="bugCtx"></div>
+      <div class="bugm-actions">
+        <button class="bugm-cancel" id="bugCancel" type="button">Cancel</button>
+        <button class="bugm-submit" id="bugSubmit" type="button">Send report</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Two sibling live regions, never nested: a role="alert" toast inside a role="status" wrap made
+     NVDA/JAWS disagree about which politeness applies. The outer wrap is layout only (no role). -->
+<div class="toast-wrap" id="toastWrap">
+  <div class="toast-region" id="toastStatus" role="status" aria-live="polite"></div>
+  <div class="toast-region" id="toastAlerts" role="alert" aria-live="assertive"></div>
+</div>
+<div class="toast-wrap toast-top" id="toastTopWrap" role="status" aria-live="polite"></div>
+<div id="srAnnounce" aria-live="polite" class="sr-only"></div>
+
+</body>
+</html>
