@@ -1,6 +1,6 @@
 # Grumbleton & Sons Hub — a Product Hub demo
 
-**Live demo:** _add your Vercel URL here_
+**Live demo:** https://product-hub-demo-olive.vercel.app
 
 This is a working demo of **Product Hub**, an internal web app that gives a sales and product team one place
 to find every product's spec sheets, renders, assembly instructions, warranties and training — and gives the
