@@ -31,11 +31,30 @@
       return /[a-z]/i.test(ch) ? "[" + ch.toUpperCase() + ch.toLowerCase() + "]" : ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }).join("");
   }
+  // The code → label table is the ONE source for the app's suffix legend (app.js reads PF.MODEL_CODES), the
+  // search's code set (MODEL_CODE_SET), and the decoded-variant words the file matcher must keep off a base
+  // model (DECODED_WORDS) — the three used to be hand-copied and drifted ("deep"/"wide" were guarded while
+  // "double"/"wire", the words the app actually shows people, were not).
+  var MODEL_CODES = { I: "Integrated Dividers", D: "Double Pusher", R: "Reduced Height Paddle", PO: "Pullout Pusher", W: "For Wire Grid", C: "Center Pusher", L: "Left Pusher", T: "T Pusher", MINI: "For Ultra-slim products" };
+  // Variant words a PM may write instead of the code ("GTX 600 Double Pusher.png"): the first meaningful word
+  // of every label, plus legacy spellings. Keyed lowercase.
+  var DECODED_WORDS = (function () {
+    var set = {};
+    Object.keys(MODEL_CODES).forEach(function (c) {
+      // "T Pusher" has no variant word of its own (T is the code; "pusher" is what every Hoardmaster is).
+      var w = MODEL_CODES[c].toLowerCase().split(/[^a-z]+/).filter(function (x) { return x.length >= 3 && x !== "for" && x !== "pusher"; })[0];
+      if (w) set[w] = 1;
+    });
+    ["centre", "mini", "riser", "deep", "wide"].forEach(function (w) { set[w] = 1; });
+    return set;
+  })();
   function modelRe(model) {
     var code = String(model).replace(/[^A-Za-z0-9]/g, "").toUpperCase();
     var mm = code.match(/^(HMX|GTX|SNX)(\d+)([A-Z]*)$/);
     if (!mm || /MINI/.test(mm[3])) return null;
-    if (mm[3]) return new RegExp(mm[1] + "\\s*" + mm[2] + "[\\s\\-]*" + mm[3] + "(?![A-Za-z])", "i");
+    // "_" is a word separator in filenames ("VPP600_I_Open.png") — matchesModel folds it, but keep the
+    // regex honest for any direct caller.
+    if (mm[3]) return new RegExp(mm[1] + "[\\s_]*" + mm[2] + "[\\s\\-_]*" + mm[3] + "(?![A-Za-z])", "i");
     // Base model with NO letter suffix (e.g. "GTX 600"). The old pattern ended in [\s\-]*(?![A-Za-z]),
     // and since [\s\-]* can match zero chars the lookahead passed at the space after the number — so
     // "GTX 600" wrongly matched a suffixed sibling's file ("GTX 600 I ...", "VPP600-I-open"). Instead,
@@ -47,16 +66,28 @@
     // is shown as "Integrated"), and PMs name files the same way — so "GTX 600 Integrated.png" was landing
     // on the plain GTX 600 as a confident match. The uppercase-code rule above can't catch it: "I" is
     // followed by more letters, so the code alternative fails and the lookahead passes.
-    var decoded = ["integrated", "deep", "reduced", "pullout", "wide", "center", "centre", "left", "mini", "riser"]
-      .map(ciLiteral).join("|");
-    return new RegExp(ciLiteral(mm[1]) + "\\s*" + mm[2] + "(?![\\s\\-]*(?:[A-Z]{1,4}(?![A-Za-z])|(?:" + decoded + ")(?![A-Za-z])))(?![A-Za-z0-9])");
+    // The uppercase-only code rule above was defeated the moment a caller lower-cased the name (guessPlacement
+    // does, through expandName), so "vpp600-d-open" landed on plain GTX 600 at high confidence. The guard now
+    // CAPTURES the word that follows the number and matchesModel judges it in code: a word that parses as a
+    // code run in any case (I, ipo, Idpo), or a decoded variant word (DECODED_WORDS), means a sibling's file.
+    // The regex alone is therefore permissive for a base model — use matchesModel, never re.test, for those.
+    var re = new RegExp(ciLiteral(mm[1]) + "[\\s_]*" + mm[2] + "(?![A-Za-z0-9])[\\s\\-_]*([A-Za-z]*)(?:[\\s\\-_]+([A-Za-z]+))?");
+    re.pfBase = true;
+    return re;
   }
   function normModel(s) { return String(s).toLowerCase().replace(/\.[a-z0-9]+$/i, "").replace(/[^a-z0-9]/g, ""); }
   function matchesModel(name, model) {
+    name = String(name == null ? "" : name).replace(/_+/g, " "); // underscores are separators on the raw-name path too
     var re = modelRe(model);
-    if (re) return re.test(name); // coded part numbers (strict — keeps 400I out of 400IR etc.)
-    var m = normModel(model);      // descriptive models: normalized filename must START with the model name
-    return m.length > 0 && normModel(name).indexOf(m) === 0;
+    if (re) {                      // coded part numbers (strict — keeps 400I out of 400IR etc.)
+      var m = re.exec(name);
+      if (!m) return false;
+      if (!re.pfBase) return true;
+      var follow = String(m[1] || "").toLowerCase(), next = String(m[2] || "").toLowerCase(); // "For Wire Grid": the variant word is one further on
+      return !(follow && (parseCodeRun(follow) || DECODED_WORDS[follow] || (follow === "for" && DECODED_WORDS[next])));
+    }
+    var mdl = normModel(model);    // descriptive models: normalized filename must START with the model name
+    return mdl.length > 0 && normModel(name).indexOf(mdl) === 0;
   }
   // Normalize a sheet cell's text. End-trimming is not enough: a name pasted from Word or Excel can carry
   // a NON-BREAKING space (or a doubled space) INSIDE it. It looks identical in Smartsheet, but the app keys
@@ -86,22 +117,33 @@
     // one a folder: that skipped Graph resolution, listed files as folders in link health, and opened a
     // single file as a folder gallery).
     var share = /\/:([a-z]):\//i.exec(path);
+    // Two share-link forms: the SHORT one (…/:f:/s/Site/<opaque id>) carries no path at all; the LONG one
+    // ("People with existing access": …/:f:/r/sites/S/Docs/Renders?csf=1&web=1) is the real path behind a
+    // marker. Drop the marker so the long form and the plain path are ONE identity — two spellings of a
+    // shared folder used to count as two dedicated folders and switch model filtering off.
+    var shareShort = !!share && /\/:[a-z]:\/s\//i.test(path);
+    if (share && !shareShort) path = path.replace(/\/:[a-z]:\/[a-z](?=\/)/i, "");
     // ".../Forms/AllItems.aspx?id=%2Fsites%2FX%2FDocs%2FRenders&viewid=..." is what copying the address bar
     // gives you while looking at a folder: the folder it shows is in the query.
-    var listed = "";
+    var listed = "", listedFile = false;
     if (/\/Forms\/AllItems\.aspx$/i.test(path) && params.id) {
       var id = params.id; try { id = decodeURIComponent(id); } catch (e) {}
       if (id) listed = id.charAt(0) === "/" ? (origin + id) : id;
+      // The same URL shape is the address bar while PREVIEWING a file in a library: id = the file's path and
+      // a parent= param names its folder. That is a file — treating it as a folder asked Graph for the
+      // children of a PDF and listed the file as folder-wired.
+      var ll = listed.substring(listed.lastIndexOf("/") + 1), lext = ll.match(/\.([A-Za-z0-9]{1,5})$/);
+      listedFile = !!listed && !!((lext && /[A-Za-z]/.test(lext[1])) || params.parent != null);
     }
     var last = path.substring(path.lastIndexOf("/") + 1), ext = last.match(/\.([A-Za-z0-9]{1,5})$/);
     var kind;
     if (share) kind = share[1].toLowerCase() === "f" ? "folder" : "file";
-    else if (listed) kind = "list";
+    else if (listed) kind = listedFile ? "file" : "list";
     else if (/\.aspx$/i.test(path)) kind = (params.sourcedoc || params.file) ? "office" : "page";
     // A FILE needs a real-looking extension: a dot + 1–5 chars with at least one LETTER. A folder named
     // "Renders v2.0" has a dotted last segment, but ".0" is digits-only, so it is still a folder.
     else kind = (ext && /[A-Za-z]/.test(ext[1])) ? "file" : "folder";
-    return { raw: raw, path: path, params: params, origin: origin, host: (origin.split("//")[1] || "").toLowerCase(), shareLetter: share ? share[1].toLowerCase() : "", listed: listed, kind: kind };
+    return { raw: raw, path: path, params: params, origin: origin, host: (origin.split("//")[1] || "").toLowerCase(), shareLetter: share ? share[1].toLowerCase() : "", shareShort: shareShort, listed: listed, kind: kind };
   }
   function looksLikeFolder(url) { var k = parseSpUrl(url).kind; return k === "folder" || k === "list"; }
   function folderFromAllItems(url) { return parseSpUrl(url).listed; }
@@ -131,6 +173,7 @@
     var p = parseSpUrl(url), base = canonFolderUrl(url), got = {};
     ["sourcedoc", "id", "file"].forEach(function (k) {
       if (p.params[k] == null) return;
+      if (k === "id" && p.listed) return; // an AllItems id IS the path, already folded into the base key
       var v = p.params[k]; try { v = decodeURIComponent(v); } catch (e) {}
       // sourcedoc is a GUID in braces whose case/brace style varies between links to the same file.
       got[k] = v.replace(/[{}]/g, "").toLowerCase();
@@ -229,6 +272,67 @@
   // 2-char token would hit almost anything) — they must land as a clean substring instead.
   function fuzzyThreshold(len) { return len <= 2 ? 0 : len <= 4 ? 1 : len <= 7 ? 2 : 3; }
 
+  // ---- Model codes ----
+  // The suffix letters of a coded Hoardmaster model name (HMX/GTX/SNX + number + codes) are a SET of codes:
+  // "HMX 200 IDPO" = Integrated Dividers + Double Pusher + Pullout Pusher. Only "PO" is two letters, plus a
+  // leading "Mini". app.js owns the labels (MODEL_CODES, kept in step by a test); this is the one shared
+  // decoder, so search reads a code letter as set MEMBERSHIP (a "d" finds HMX 200 ID) instead of a string
+  // prefix. A name whose suffix holds an unknown letter decodes to null — never guess ("GTX 400 IP").
+  var MODEL_CODE_SET = {}; Object.keys(MODEL_CODES).forEach(function (c) { MODEL_CODE_SET[c] = 1; });
+  function parseCodeRun(s) {
+    var rest = String(s == null ? "" : s).toUpperCase().replace(/\s+/g, "");
+    if (!rest || !/^[A-Z]+$/.test(rest)) return null;
+    var out = [];
+    if (rest.slice(0, 4) === "MINI") { out.push("MINI"); rest = rest.slice(4); }
+    for (var i = 0; i < rest.length;) {
+      if (rest.slice(i, i + 2) === "PO") { out.push("PO"); i += 2; } else { out.push(rest.charAt(i)); i += 1; }
+    }
+    for (i = 0; i < out.length; i++) if (!MODEL_CODE_SET[out[i]]) return null;
+    return out.length ? out : null;
+  }
+  function modelCodes(name) {
+    var m = /^(?:HMX|GTX|SNX)\s+\d+\s+((?:Mini\s+)?[A-Za-z]+)$/i.exec(String(name == null ? "" : name).trim());
+    return m ? parseCodeRun(m[1]) : null;
+  }
+  var LINE_PREFIX = { hpp: 1, vpp: 1, epp: 1 };
+  // Is this query token a model CODE (matched against the model name's code set) rather than a word?
+  // One character always is. A 2–4 letter run that parses as codes ("id", "ipo", "ct", "mini") is one only
+  // when the query is plainly about a model — it also names a line (hpp/vpp/epp) or a model number — so
+  // "lid", "tilt" or "it" typed on their own stay ordinary words. Without this, "hpp 200 id" matched the
+  // I model through "Integrated DIviDers" in its decoded label and "epp 200 ct" matched every SNX 200
+  // through "produCT overview", ranking a sibling as a confident exact hit.
+  function isCodeToken(tok, tokens) {
+    tok = String(tok == null ? "" : tok).toLowerCase();
+    if (tok.length === 1) return true;
+    if (tok.length > 4 || !/^[a-z]+$/.test(tok) || !parseCodeRun(tok)) return false;
+    for (var i = 0; i < (tokens || []).length; i++) {
+      var t = String(tokens[i] == null ? "" : tokens[i]).toLowerCase();
+      if (LINE_PREFIX[t] || /^[0-9]+$/.test(t)) return true;
+    }
+    return false;
+  }
+  // Does code token `tok` fit the model named by `codeSource`? A decodable name answers by set membership
+  // (every code in the token is one of the model's — so "d" fits HMX 200 ID and "ipo" fits HMX 200 IDPO);
+  // any other name keeps the start-of-code boundary rule.
+  function codeMatches(tok, codeSource) {
+    var have = modelCodes(codeSource), want = parseCodeRun(tok);
+    if (have && want) {
+      for (var i = 0; i < want.length; i++) if (have.indexOf(want[i]) === -1) return false;
+      return true;
+    }
+    return codeTokenIn(codeSource, tok);
+  }
+  // Plain-word containment that forgives a plural the row has in the singular ("spec sheets" → "spec
+  // sheet", "gondolas"). Only a trailing s/es is tried, on tokens long enough that the stem is distinctive.
+  function termIn(hay, tok) {
+    if (hay.indexOf(tok) !== -1) return true;
+    if (tok.length >= 4 && tok.charAt(tok.length - 1) === "s") {
+      if (hay.indexOf(tok.slice(0, -1)) !== -1) return true;
+      if (tok.length >= 5 && tok.slice(-2) === "es" && hay.indexOf(tok.slice(0, -2)) !== -1) return true;
+    }
+    return false;
+  }
+
   // Does the single character `ch` occur in `hay` where a NEW code starts? That means: at the very start,
   // straight after a separator, or across a digit<->letter change — so "400i" and "400 i" both contain the
   // code "i", while "shelving" and "compliance" do not.
@@ -287,25 +391,49 @@
   // token matched (see searchMatch), so "the thing" on its own still finds nothing.
   var FILLER = { the: 1, a: 1, an: 1, thing: 1, things: 1, stuff: 1, one: 1, some: 1, any: 1, please: 1,
                  that: 1, this: 1, and: 1, or: 1, of: 1, to: 1, my: 1, our: 1, need: 1, want: 1,
-                 find: 1, show: 1, me: 1, get: 1 };
+                 find: 1, show: 1, me: 1, get: 1,
+                 // conversational openers: "i'm looking for…", "can you give me…", "where is the…"
+                 "for": 1, looking: 1, am: 1, is: 1, are: 1, "do": 1, does: 1, can: 1, could: 1, would: 1,
+                 where: 1, what: 1, have: 1, has: 1, give: 1, send: 1, we: 1, you: 1, us: 1, it: 1, there: 1,
+                 hi: 1, hey: 1, hello: 1, pls: 1, plz: 1, im: 1, like: 1 };
+  // Contraction tails the tokenizer's punctuation split leaves behind: "i'm" → "i m", "i'd" → "i d".
+  var PRONOUN_TAIL = { m: 1, d: 1, ll: 1, ve: 1 };
+  // Query tokens for MATCHING: tokenizeQuery, minus filler, minus the conversational pronoun. A rep who
+  // types "i need the hpp 400 spec sheet" means the pronoun, not the Integrated-Dividers code; left in, that
+  // "i" silently narrowed the result to I* models, and "i need hpp 200 d…" found nothing. The "i" is dropped
+  // when it is followed by filler or a contraction tail and is not sitting in model position (right after a
+  // line prefix or model number — "hpp 400 i for …" keeps it); the tail goes with it, or "i'd" would read as
+  // code D. The live search, the typo fallback and the demand-list unmet check all tokenize through here;
+  // result highlighting keeps the raw tokenizeQuery.
+  function searchTokens(q) {
+    var t = tokenizeQuery(q), out = [];
+    for (var i = 0; i < t.length; i++) {
+      if (t[i] === "i" && i + 1 < t.length && (FILLER[t[i + 1]] || PRONOUN_TAIL[t[i + 1]])) {
+        var prev = i > 0 ? t[i - 1] : "";
+        if (!(LINE_PREFIX[prev] || /^[0-9]+$/.test(prev))) { if (PRONOUN_TAIL[t[i + 1]]) i++; continue; }
+      }
+      if (FILLER[t[i]]) continue;
+      out.push(t[i]);
+    }
+    return out;
+  }
   function searchMatch(tokens, name, rest, codeSource) {
     var nm = String(name || "").toLowerCase();
     var hay = (nm + " " + String(rest || "")).toLowerCase();
     var code = String(codeSource == null ? name : codeSource || "").toLowerCase();
-    var matched = 0, missedFiller = 0;
+    var matched = 0;
     for (var i = 0; i < (tokens || []).length; i++) {
       var t = String(tokens[i] || "").toLowerCase();
       if (!t) continue;
-      var ok = (t.length > 1) ? (hay.indexOf(t) !== -1) : codeTokenIn(code, t);
-      if (ok) { matched++; continue; }
-      // A miss on a MEANINGFUL word still rules the row out — "Hoardmaster riser" must not match the
-      // Gondola row. A miss on FILLER is forgiven, but only when something else matched, so a rep typing
-      // the way they speak ("the roller shelf thing") isn't told the catalog has nothing.
-      if (FILLER[t]) { missedFiller++; continue; }
-      return false;
+      // Conversational filler is neither required nor a match on its own — "the roller shelf thing" finds
+      // the roller shelf, and "it" alone (a substring of "Lite") is not a search. A miss on any MEANINGFUL
+      // word still rules the row out: "Hoardmaster riser" must not match the Gondola row.
+      if (FILLER[t]) continue;
+      var ok = isCodeToken(t, tokens) ? codeMatches(t, code) : termIn(hay, t);
+      if (!ok) return false;
+      matched++;
     }
-    if (missedFiller && !matched) return false; // filler alone is not a search
-    return true;
+    return matched > 0;
   }
   // Penalty for matching `query` against `haystack`, tolerating typos. Every whitespace token of the query
   // must match — either as a plain substring of the haystack (penalty 0) OR within its edit-distance
@@ -319,17 +447,19 @@
     var hay = String(haystack).toLowerCase();
     var nm = name == null ? hay : String(name).toLowerCase();
     var words = hay.split(/[^a-z0-9]+/).filter(Boolean);
-    var tokens = tokenizeQuery(query); // same digit↔letter split as the exact path
+    var tokens = searchTokens(query); // same split + conversational cleanup as the exact path
     if (!tokens.length) return -1;
-    var total = 0;
+    var total = 0, matched = 0;
     for (var t = 0; t < tokens.length; t++) {
       var tok = tokens[t];
-      if (tok.length === 1) { if (codeTokenIn(nm, tok)) continue; return -1; } // a code matches exactly or not at all
-      // A purely numeric token is a model NUMBER — exact substring or nothing. Fuzzy-matching it would let
-      // "500" match "400" (one edit), surfacing the wrong product as a confident "closest match" AND
-      // suppressing the genuine demand-miss log for a model that really doesn't exist.
-      if (/^[0-9]+$/.test(tok)) { if (hay.indexOf(tok) !== -1) continue; return -1; }
-      if (hay.indexOf(tok) !== -1) continue; // clean substring hit — no penalty
+      if (FILLER[tok]) continue; // forgiven here too, or "the flexroler thing" failed on "thing" after rescuing the typo
+      if (isCodeToken(tok, tokens)) { if (codeMatches(tok, nm)) { matched++; continue; } return -1; } // a code matches exactly or not at all
+      // A purely numeric token is a model NUMBER, and hpp/vpp/epp is a product LINE — exact substring or
+      // nothing. Fuzzy-matching them would let "500" match "400" and "epp" match "hpp" (one edit each),
+      // surfacing the wrong product as a confident "closest match" AND suppressing the genuine demand-miss
+      // log for a model that really doesn't exist.
+      if (/^[0-9]+$/.test(tok) || LINE_PREFIX[tok]) { if (hay.indexOf(tok) !== -1) { matched++; continue; } return -1; }
+      if (termIn(hay, tok)) { matched++; continue; } // clean substring hit — no penalty
       var max = fuzzyThreshold(tok.length);
       if (max === 0) return -1; // too short to fuzzy-match safely and it wasn't a substring
       var best = max + 1;
@@ -338,9 +468,9 @@
         if (d < best) best = d;
       }
       if (best > max) return -1; // no word near this token → the whole query can't match this row
-      total += best;
+      total += best; matched++;
     }
-    return total;
+    return matched ? total : -1;
   }
 
   // Search SYNONYMS: sales / shop-floor vocabulary that doesn't textually match the catalog. Each entry
@@ -367,6 +497,12 @@
     { from: "sell sheet", to: "flyer" },
     { from: "sales sheet", to: "flyer" },
     { from: "data sheet", to: "spec sheet" },
+    { from: "spec sheets", to: "spec sheet" },
+    { from: "data sheets", to: "spec sheet" },
+    { from: "cut sheets", to: "cut sheet" },
+    { from: "sell sheets", to: "flyer" },
+    { from: "sales sheets", to: "flyer" },
+    { from: "test reports", to: "compliance & testing" },
     { from: "test report", to: "compliance & testing" },
     { from: "product images", to: "renders" },
     { from: "installation", to: "assembly instructions" },
@@ -377,7 +513,19 @@
     { from: "renderings", to: "renders" },
     { from: "compliance", to: "compliance & testing" },
     { from: "certification", to: "compliance & testing" },
-    { from: "overview", to: "product overview" }
+    { from: "overview", to: "product overview" },
+    // Glued and plural resource words reps actually type (the exact path has no stemmer for these).
+    { from: "datasheet", to: "spec sheet" },
+    { from: "datasheets", to: "spec sheet" },
+    { from: "specsheet", to: "spec sheet" },
+    { from: "specsheets", to: "spec sheet" },
+    { from: "cutsheet", to: "cut sheet" },
+    { from: "cutsheets", to: "cut sheet" },
+    { from: "manual", to: "assembly instructions" },
+    { from: "manuals", to: "assembly instructions" },
+    { from: "brochure", to: "flyer" },
+    { from: "brochures", to: "flyer" },
+    { from: "flyers", to: "flyer" }
   ];
   // Normalize + validate one PM-entered alias into {from,to} (lowercased, whitespace-collapsed) or null if
   // unusable — empty, identical (a no-op that would just churn), or too long. ONE authority used by the
@@ -397,7 +545,9 @@
   // AFTER the built-in ones.
   function expandSearchQuery(q, extra) {
     var orig = String(q == null ? "" : q);
-    var base = orig.toLowerCase().replace(/\s+/g, " ").trim();
+    // Punctuation splits words the same way tokenizeQuery does ("data-sheet" → "data sheet"), keeping the
+    // "&" that "compliance & testing" needs — otherwise a hyphenated query skipped its alias and missed.
+    var base = orig.toLowerCase().replace(/[^a-z0-9&]+/g, " ").trim();
     if (!base) return orig;
     var list = (extra && extra.length) ? SEARCH_ALIASES.concat(extra) : SEARCH_ALIASES;
     var s = " " + base + " ", changed = false;
@@ -410,6 +560,40 @@
       if (s.indexOf(needle) !== -1) { s = s.split(needle).join(" " + list[i].to + " "); changed = true; }
     }
     return changed ? s.replace(/\s+/g, " ").trim() : orig;
+  }
+
+  // Order search hits best-first — the ONE comparator for the exact and the typo-tolerant pass. Keys, in
+  // order: the fuzzy penalty (rows on the typo path carry `pen`; 0 otherwise) → the EXACT model the rep
+  // typed (every word of the model name is in the query), so "hpp 400 i flyer" leads with HMX 400 I even
+  // when its flyer is still WIP and a sibling's flyer exists → a file whose resource the query names, then
+  // the family/product/model row itself, then the model's other files → level (family › product › model ›
+  // file), so a family-name search can't be buried under 40 file rows → whether the row's own name carries
+  // every meaningful token (vs. matching only through the breadcrumb) → how many model-name words the query
+  // did not say ("400 i" lists HMX 400 I before HMX 400 IPO) → input order, which is catalog order: each
+  // model's rows stay together, its files in resource order. Stable; never mutates the input.
+  function rankSearchHits(hits, tokens) {
+    var tset = {};
+    (tokens || []).forEach(function (t) { tset[String(t).toLowerCase()] = 1; });
+    var meaningful = (tokens || []).filter(function (t) { return !FILLER[t]; });
+    var LVL = { Family: 0, Product: 1, Model: 2, Live: 3 };
+    function keyOf(n) {
+      var model = String(n.model || n.name || "");
+      var missing = 0;
+      tokenizeQuery(model).forEach(function (w) { if (!tset[w]) missing++; });
+      var live = !!(n.live || n.lvl === "Live");
+      var resWords = n.resource ? tokenizeQuery(n.resource) : [];
+      var resNamed = live && resWords.length > 0 && resWords.every(function (w) { return tset[w]; });
+      var own = String(n.name || "").toLowerCase();
+      var nameCovers = meaningful.length > 0 && meaningful.every(function (t) { return isCodeToken(t, tokens) ? codeMatches(t, model) : termIn(own, t); });
+      var lvl = LVL[n.lvl]; if (lvl == null) lvl = 4;
+      return [n.pen > 0 ? n.pen : 0, missing === 0 ? 0 : 1, live ? (resNamed ? 0 : 2) : 1, lvl, nameCovers ? 0 : 1, missing];
+    }
+    var dec = (hits || []).map(function (n, i) { return { n: n, i: i, k: keyOf(n) }; });
+    dec.sort(function (a, b) {
+      for (var j = 0; j < a.k.length; j++) if (a.k[j] !== b.k[j]) return a.k[j] - b.k[j];
+      return a.i - b.i;
+    });
+    return dec.map(function (d) { return d.n; });
   }
 
   // Union a browser's local favorites with the server-synced set. Server is the cross-device source of
@@ -430,7 +614,7 @@
   // Lives here (browser + node) so the Progress panel and the daily scan share one matcher. Reads a
   // filename the way a person would ("Hoardmaster w riser" == "Hoardmaster with Riser") instead of the
   // dumb exact-prefix match the folder-link filter uses.
-  function expandName(fileName) {
+  function expandName(fileName, opts) {
     var s = " " + String(fileName).toLowerCase() + " ";
     s = s.replace(/\.[a-z0-9]{1,5}\s*$/, " ");
     s = s.replace(/_+/g, " "); // "HPP_400_I_Spec_Sheet.pdf" — underscores are word separators, not letters
@@ -448,7 +632,10 @@
     s = s.replace(/\bv\d+(\.\d+)?\b/g, " ");
     s = s.replace(/\b\d{1,2}[.\-/]\d{2,4}\b/g, " ");
     s = s.replace(/\b\d{6,8}\b/g, " ");
-    s = s.replace(/\s+\d+\s*$/, " ");
+    // A trailing number is USUALLY a duplicate counter ("… 1.pdf") — but once the resource/version/date
+    // words are gone it can be the MODEL number ("Goblet Rack 550 Cut Sheet.pdf" → "Goblet Rack 550"). guessPlacement
+    // tries the kept form first; the stripped form is the fallback. (opts.keepNumber)
+    if (!(opts && opts.keepNumber)) s = s.replace(/\s+\d+\s*$/, " ");
     return s.replace(/\s+/g, " ").replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "").trim();
   }
   // Read the RESOURCE TYPE a filename explicitly names, BEFORE expandName strips those words away. The scan
@@ -457,23 +644,32 @@
   // unambiguous phrases — Flyer/Product Overview/Renders/Compliance are too weakly named to trust here, so
   // they return null and fall back to folder context. "cut sheet" is checked before "spec sheet" because
   // both contain "sheet"; a filename with both words is a genuine ambiguity best left to a human anyway.
-  function resourceFromName(fileName) {
-    var s = " " + String(fileName || "").toLowerCase().replace(/[_\-]+/g, " ") + " ";
-    if (/\bcut\s*sheet\b/.test(s)) return "Cut Sheet";
-    if (/\b(product\s+)?spec(ification)?s?\s*sheet\b/.test(s)) return "Spec Sheet";
-    if (/\b(assembly|installation|instructions?)\b/.test(s)) return "Assembly Instructions";
-    if (/\bwarranty\b/.test(s)) return "Warranty";
-    if (/\btraining\b/.test(s)) return "Training";
-    if (/\bin\s?store\b/.test(s)) return "In-Store Images"; // "in-store"/"in store"/"instore" photos
-    return null;
+  // EVERY type a name mentions, most specific first. "ProQueue Warranty Claim Instructions.pdf" names both
+  // Assembly Instructions and Warranty — the planner treats it as a conflict only if the folder's own type is
+  // not among them (otherwise confirming the "conflict" created the very misfile the check exists to prevent).
+  function resourceTypesInName(fileName) {
+    var s = " " + String(fileName || "").toLowerCase().replace(/[_\-]+/g, " ") + " ", out = [];
+    // The Product Management site names files `<Type>_<Product>_<variant>` (October 2026): a LEADING type token is
+    // unambiguous even for Flyer / Product Overview, which stay untrusted mid-name (planProductFolder, place-cron).
+    var lead = leadTypeFromName(fileName); if (lead) out.push(lead);
+    if (/\bcut\s*sheet\b/.test(s)) out.push("Cut Sheet");
+    if (/\b(product\s+)?spec(ification)?s?\s*sheet\b/.test(s)) out.push("Spec Sheet");
+    if (/\b(assembly|installation|instructions?)\b/.test(s)) out.push("Assembly Instructions");
+    if (/\bwarranty\b/.test(s)) out.push("Warranty");
+    if (/\btraining\b/.test(s)) out.push("Training");
+    if (/\bin\s?store\b/.test(s)) out.push("In-Store Images"); // "in-store"/"in store"/"instore" photos
+    return out.filter(function (t, i) { return out.indexOf(t) === i; });
   }
+  function resourceFromName(fileName) { return resourceTypesInName(fileName)[0] || null; }
   // models: [{ model, product, … }]. Returns { model, resource, confidence:"high"|"low", candidates, reason }.
   function guessPlacement(fileName, resource, models) {
-    var expanded = expandName(fileName);
+    var full = expandName(fileName, { keepNumber: true }), expanded = expandName(fileName);
+    var numbered = full !== expanded; // the name ended in a number that is not noise — a model number or a counter
     var core = normModel(expanded);
     var out = { model: null, resource: resource, confidence: "low", candidates: [], reason: "no-match" };
     if (!core) return out;
-    var a = models.filter(function (m) { return matchesModel(expanded, m.model); });
+    var a = models.filter(function (m) { return matchesModel(full, m.model); });
+    if (!a.length && numbered) a = models.filter(function (m) { return matchesModel(expanded, m.model); });
     if (a.length) {
       var maxLen = a.reduce(function (n, m) { return Math.max(n, normModel(m.model).length); }, 0);
       var best = a.filter(function (m) { return normModel(m.model).length === maxLen; });
@@ -482,7 +678,9 @@
     }
     if (core.length >= 3) {
       var b = models.filter(function (m) { return normModel(m.model).indexOf(core) === 0; });
-      if (b.length === 1) return { model: b[0], resource: resource, confidence: "high", candidates: [b[0].model], reason: "unique-prefix" };
+      // A name that carried a number NO model matched ("Goblet Rack 330.pdf") must not be "corrected" to the one
+      // model sharing its prefix at high confidence — offer it, don't place it.
+      if (b.length === 1 && !numbered) return { model: b[0], resource: resource, confidence: "high", candidates: [b[0].model], reason: "unique-prefix" };
       if (b.length > 1) return { model: null, resource: resource, confidence: "low", candidates: b.map(function (m) { return m.model; }), reason: "generic" };
     }
     var fz = models.map(function (m) {
@@ -494,6 +692,9 @@
   }
   function parentFolderOf(fileUrl) {
     var p = parseSpUrl(fileUrl);
+    // A SHORT share link (…/:b:/s/Site/<id>) names no folder at all — slicing its path handed the placement
+    // scan a junk "folder" that Graph could not list, which degraded every nightly heartbeat.
+    if (p.shareShort) return "";
     // A folder listing's parent is the folder above the one it shows.
     if (p.listed) { var j = p.listed.lastIndexOf("/"); return j > 10 ? p.listed.slice(0, j) : ""; }
     // Any other .aspx (an Office web link, a DispForm) has no folder derivable from the URL alone; the
@@ -531,8 +732,10 @@
     });
     return Object.keys(byFolder).map(function (c) {
       var e = byFolder[c];
-      var resource = Object.keys(e.resources).sort(function (a, b) { return e.resources[b] - e.resources[a] || (a < b ? -1 : 1); })[0];
-      return { folderUrl: e.folderUrl, resource: resource };
+      var all = Object.keys(e.resources).sort(function (a, b) { return e.resources[b] - e.resources[a] || (a < b ? -1 : 1); });
+      // `resources` = every type that links files in this folder. A product folder holds several — the scan must
+      // then trust each file's own name for its type, never the folder's most-referenced one (planFolderPlacements opts.multiType).
+      return { folderUrl: e.folderUrl, resource: all[0], resources: all };
     });
   }
   // "model::resource" keys that are wired to a SINGLE FOLDER. Those already auto-update — whatever is in
@@ -558,22 +761,31 @@
   }
   // files: [{ name, url }]. wiredSet from wiredUrlSet(); folderWired from folderWiredSet() (optional).
   // -> { autoPlace:[{model,resource,url,file,folderUrl}], pending:[{file,url,folderUrl,resource,candidates,reason}] }.
-  function planFolderPlacements(folderUrl, resource, files, models, wiredSet, folderWired) {
+  function planFolderPlacements(folderUrl, resource, files, models, wiredSet, folderWired, opts) {
     var autoPlace = [], pending = [];
     (files || []).forEach(function (f) {
       var url = f && (f.url || f.webUrl);
       var name = f && f.name;
       if (!url || !name) return;
       if (wiredSet && wiredSet[canonFileUrl(url)]) return;
-      var g = guessPlacement(name, resource, models);
+      // `<Type>_<Product>_<variant>` names (the Product Management site): the leading type token is not part of
+      // the model name — "Flyer_Hoardmaster_A4.pdf" is a Hoardmaster file. Strip it before matching, else no
+      // file named the new way ever matches a model.
+      var g = guessPlacement(stripLeadType(name), resource, models);
       // Resource-type cross-check. The scan decides a file's resource type from its FOLDER; this catches a
       // file whose own name says otherwise (a "Cut Sheet" dropped into the Spec Sheet folder). It applies
       // whatever the model-match confidence: a confident match is WITHHELD rather than auto-misfiled, and an
       // ambiguous one is offered under its REAL type too — otherwise a human placing it just re-creates the
       // misfile by hand. Only a confident match with NO conflict is placed automatically.
-      var named = resourceFromName(name);
-      var conflict = !!(named && named !== resource);
-      if (g.confidence === "high" && g.model && !conflict) {
+      // The file's OWN type: the leading token, a type word, or — for images and footage — the extension. A
+      // PNG is a render and a JPEG a store photo whatever folder they sit in; one product folder holds every
+      // type, and offering its renders as confident "Flyer" matches is exactly how 40 files landed in every
+      // Hoardmaster Flyer cell (2026-10-07). Untyped documents (a part-number sheet) are offered, not placed,
+      // when the folder is shared by several types (opts.multiType).
+      var own = typeFromFileName(name), namedAll = resourceTypesInName(name), named = own.type || namedAll[0] || null;
+      var conflict = !!(named && named !== resource && namedAll.indexOf(resource) === -1);
+      var untypedShared = !!(opts && opts.multiType && !named);
+      if (g.confidence === "high" && g.model && !conflict && !untypedShared) {
         // Already served by a folder link -> nothing to place, and nothing worth asking a human about.
         if (folderWired && folderWired[g.model.model + "::" + resource]) return;
         autoPlace.push({ model: g.model.model, resource: resource, url: url, file: name, folderUrl: folderUrl });
@@ -583,7 +795,7 @@
         file: name, url: url, folderUrl: folderUrl,
         resource: conflict ? named : resource,
         candidates: g.model ? [g.model.model] : (g.candidates || []),
-        reason: conflict ? "resource-conflict" : g.reason
+        reason: conflict ? "resource-conflict" : untypedShared && g.confidence === "high" ? "no-type" : g.reason
       });
     });
     return { autoPlace: autoPlace, pending: pending };
@@ -838,8 +1050,9 @@
     var cmp = null;
     if (sort === "name") {
       cmp = function (a, b) {
-        var an = String(accessors.name(a.m)).toLowerCase(), bn = String(accessors.name(b.m)).toLowerCase();
-        return an < bn ? -1 : an > bn ? 1 : a.i - b.i;
+        // Natural order: "HMX 200" before "HMX 1000" (plain code-unit order put 1000 first).
+        var an = String(accessors.name(a.m)), bn = String(accessors.name(b.m));
+        return an.localeCompare(bn, undefined, { numeric: true, sensitivity: "base" }) || (a.i - b.i);
       };
     } else if (sort === "complete-desc") {
       cmp = function (a, b) { return (accessors.completeness(b.m) - accessors.completeness(a.m)) || (a.i - b.i); };
@@ -897,8 +1110,11 @@
   // ---- Gibberish search-miss filter ----
   // Keeps keyboard-mash queries ("zzzqqxnotathing") off the PM "wanted by staff" worklist and the Metrics
   // list, without dropping real demand. High-precision (few false positives): a query with any digit is
-  // assumed real; otherwise it's gibberish only if some token (≥5 letters) has a 3+ same-letter run, a 5+
-  // consonant run, or no vowel at all. Real product/model/sales terms don't hit any of those.
+  // assumed real; otherwise it's gibberish only if some token has a 3+ same-letter run (any length), or a
+  // token of 5+ letters has no vowel at all, a 6+ consonant run, or a 5-consonant run with none of the
+  // clusters English builds such runs from (th/ch/sh/ck/ng/ph/st). Real product/model/sales terms don't
+  // hit any of those: "backsplash", "lengths", "matchstick" carry a five-run but a cluster too; "asdfgh"
+  // does not.
   function looksLikeGibberish(q) {
     var str = String(q == null ? "" : q).toLowerCase();
     if (/\d/.test(str)) return false; // a number → likely a real model/size query, keep it
@@ -906,7 +1122,9 @@
     return toks.some(function (t) {
       if (/(.)\1\1/.test(t)) return true;                    // 3+ identical letters in a row (zzz, aaaa) — any length
       if (t.length < 5) return false;                        // other rules only judge longer tokens
-      if (/[bcdfghjklmnpqrstvwxz]{5,}/.test(t)) return true; // 5+ consonants in a row (y treated as a vowel)
+      if (/[bcdfghjklmnpqrstvwxz]{6,}/.test(t)) return true;   // 6+ consonants in a row (y treated as a vowel)
+      var runs = t.match(/[bcdfghjklmnpqrstvwxz]{5}/g) || [];   // a five-run is English only around a cluster
+      for (var r = 0; r < runs.length; r++) if (!/th|ch|sh|ck|ng|ph|st/.test(runs[r])) return true;
       if (!/[aeiouy]/.test(t)) return true;                  // no vowel at all — y counts, as the rule above says
                                                              // (without it "rhythm"/"glyph" were called gibberish)
       return false;
@@ -1000,8 +1218,248 @@
     };
   }
 
+  // ---- Product-folder linking (the Product Management site convention, October 2026) ----
+  // The collateral moved to ONE folder per product ("01 Hoardmaster" … "12 Loss Prevention") holding every
+  // resource type together, with files named `<Type>_<Product>_<variant>` ("Spec Sheet_Hanging
+  // Hoardmaster_US.pdf", "Instruction Sheet_Hoardmaster_Riser.pdf"). The old per-type folders are gone, so the
+  // type is read from the NAME (leading token first), the product from the folder (or the name inside a
+  // multi-product folder such as "02 Hoardmaster"), and the models from what the name pins — a code run
+  // ("HMX I"), a number ("Goblet Rack 550") or a variant phrase ("gondola", "partial pullout") — else a shared
+  // document fans out to every model of the product and a render/photo lands on the base model.
+  // Pure: files + products in, a plan out. The panel renders it and a PM corrects it before any write.
+  var LEGACY_SITES = ["GlobalMarketing", "TestsiteIlya"]; // the sites the collateral LEFT — links to them are removed, never kept
+  function isLegacyUrl(url) {
+    var m = /sharepoint\.com\/sites\/([^/?#]+)/i.exec(String(url == null ? "" : url));
+    if (!m) return false;
+    var site = m[1].toLowerCase();
+    return LEGACY_SITES.some(function (s) { return s.toLowerCase() === site; });
+  }
+  // Leading-token → type. Checked against the start of the name only (a "flyer" mid-name is too weak, see
+  // resourceTypesInName); longest token first so "product training" wins over "training".
+  var LEAD_TYPE_TOKENS = [
+    ["cut sheet", "Cut Sheet"], ["cutsheet", "Cut Sheet"],
+    ["product spec sheet", "Spec Sheet"], ["spec sheet", "Spec Sheet"], ["specsheet", "Spec Sheet"], ["specs sheet", "Spec Sheet"],
+    ["instruction sheet", "Assembly Instructions"], ["instructions", "Assembly Instructions"], ["instruction", "Assembly Instructions"], ["assembly", "Assembly Instructions"],
+    ["warranty", "Warranty"],
+    ["product training", "Training"], ["training", "Training"], ["howtovideo", "Training"], ["how to video", "Training"], ["how to", "Training"],
+    ["flyer", "Flyer"],
+    ["product overview", "Product Overview"], ["overview", "Product Overview"],
+    ["in store", "In-Store Images"], ["instore", "In-Store Images"], ["in store images", "In-Store Images"],
+    ["renders", "Renders"], ["render", "Renders"],
+    ["compliance", "Compliance & Testing"], ["testing", "Compliance & Testing"]
+  ];
+  function nameWords(name) {
+    return String(name == null ? "" : name).toLowerCase().replace(/\.[a-z0-9]{1,5}\s*$/, "").replace(/[_\-–—.,()+]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function leadTypeFromName(name) {
+    var n = nameWords(name);
+    if (!n) return null;
+    for (var i = 0; i < LEAD_TYPE_TOKENS.length; i++) {
+      var tok = LEAD_TYPE_TOKENS[i][0];
+      if (n === tok || n.indexOf(tok + " ") === 0) return LEAD_TYPE_TOKENS[i][1];
+    }
+    return null;
+  }
+  // The name without its leading type token ("Flyer_Hoardmaster_A4.pdf" → "Hoardmaster_A4.pdf"), for model matching.
+  function stripLeadType(name) {
+    var s = String(name == null ? "" : name);
+    if (!leadTypeFromName(s)) return s;
+    var rest = s;
+    // Cut the longest known token off the raw string (case-insensitive; _ and - read as spaces, same length).
+    var low = s.toLowerCase().replace(/[_\-]/g, " "), best = 0;
+    LEAD_TYPE_TOKENS.forEach(function (p) { var tok = p[0]; if (low.indexOf(tok + " ") === 0 && tok.length > best) best = tok.length; });
+    if (best) rest = s.slice(best).replace(/^[\s_\-]+/, "");
+    return rest || s;
+  }
+  // A store photo/video name carries a customer + place + date ("ProQueue_Shell_Germany_092026 (3).jpeg",
+  // "Goblet Rack for Dairy_Kroger Merch Center_Sep2026_2.jpeg", "Germany_Rewe_HPP_Candy Aisle_July2026_1.jpeg").
+  var STORE_SHOT_RE = /(^|[\s_(])(\d{6}|\d{4}[-_.]\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s?\d{4})(?=$|[\s_).])/i;
+  // { type, how }: how = "lead" (leading token) | "word" (type named mid-name) | "photo" | "video" | "image" |
+  // null (a PDF/PPTX with no type word — a part-number sheet, a dieline: a human picks or it stays unlinked).
+  function typeFromFileName(name) {
+    var lead = leadTypeFromName(name);
+    if (lead) return { type: lead, how: "lead" };
+    var words = resourceTypesInName(name);
+    if (words.length) return { type: words[0], how: "word" };
+    var ext = (String(name == null ? "" : name).toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || "";
+    if (/^(jpe?g|heic|webp)$/.test(ext)) return { type: "In-Store Images", how: "photo" };
+    if (/^(mp4|mov|m4v|webm)$/.test(ext)) return { type: "In-Store Images", how: "video" }; // store footage — a training video carries its Training/HowTo token
+    if (/^(png|gif|tiff?|bmp)$/.test(ext)) return STORE_SHOT_RE.test(String(name)) ? { type: "In-Store Images", how: "photo" } : { type: "Renders", how: "image" };
+    return { type: null, how: null };
+  }
+  // Which catalog products a numbered product folder stands for. "01 Hoardmaster" → Hoardmaster + Hoardmaster
+  // Lite (the line that STARTS with it shares its documents); "02 Hoardmaster" → every product ending in
+  // Hoardmaster; "05 Goblet Rack for Dairy" → exactly that. A folder that names no product ("10 ProDisplay",
+  // "12 Loss Prevention") returns [] and the PM picks. products: [{ name, models }].
+  function productsForFolder(folderName, products) {
+    var label = String(folderName == null ? "" : folderName).replace(/^\s*\d+(\.\d+)?\s*[-–:.]?\s*/, "").trim();
+    var nl = normModel(label);
+    if (!nl) return [];
+    var exact = products.filter(function (p) { return normModel(p.name) === nl; });
+    if (exact.length) {
+      var line = products.filter(function (p) { var np = normModel(p.name); return np !== nl && np.indexOf(nl) === 0; });
+      return exact.concat(line);
+    }
+    var ends = products.filter(function (p) { var np = normModel(p.name); return np.length > nl.length && np.slice(-nl.length) === nl; });
+    if (ends.length) return ends;
+    return products.filter(function (p) { return p.family && normModel(p.family) === nl; });
+  }
+  var PRODUCT_LINES = { hpp: "Hanging Hoardmaster", vpp: "Versa Hoardmaster", epp: "Easy Hoardmaster" };
+  // Every word a leading type token can be made of — a family word right after one of these is unqualified.
+  var TYPE_WORDS = {}; LEAD_TYPE_TOKENS.forEach(function (p) { p[0].split(" ").forEach(function (w) { TYPE_WORDS[w] = 1; }); });
+  var VARIANT_STOP = { with: 1, as: 1, for: 1, in: 1, the: 1, and: 1, on: 1, a: 1 };
+  function tokensOf(s) { return nameWords(s).split(" ").filter(Boolean); }
+  // The words of a model name that are not the product name ("Hoardmaster with Partial Pullout Gondola" under
+  // Hoardmaster → ["partial", "pullout", "gondola"]); [] for the base model.
+  function variantTokens(model, product) {
+    var pt = {}; tokensOf(product).forEach(function (t) { pt[t] = 1; });
+    // A bare number is not a variant WORD ("Goblet Rack 770 (Dairy)" under Goblet Rack for Dairy → ["770"] would let any
+    // "770" file pin the Dairy model); numbers are matched by the exact/coded rules instead.
+    return tokensOf(model).filter(function (t) { return !pt[t] && !VARIANT_STOP[t] && !/^\d+$/.test(t); });
+  }
+  function parseCoded(model) {
+    var m = /^(HMX|GTX|SNX)\s+(\d+)\s+(.+)$/i.exec(String(model || "").trim());
+    return m ? { line: m[1].toLowerCase(), number: m[2], suffix: m[3].replace(/\s+/g, "").toUpperCase() } : null;
+  }
+  // Pin a file's name to models of ONE product. Returns { models, reason } — reason: "code" (line + codes/number),
+  // "number" (a number no code set narrowed — candidates only), "variant" (phrase), "exact", or null (nothing pinned).
+  function pinModels(name, product, models) {
+    var toks = tokensOf(name), squash = toks.join("");
+    // 1. the full model name appears as a run of whole tokens (longest wins) — "Hanging Hoardmaster on rail.png",
+    //    "Cut Sheet_Goblet Rack 550_US". Whole tokens, not a substring: "hpp 200 ipo" must not read as "HMX 200 I".
+    function hasRun(seq) { if (!seq.length) return false; for (var i = 0; i + seq.length <= toks.length; i++) { var ok = true; for (var j = 0; j < seq.length; j++) if (toks[i + j] !== seq[j]) { ok = false; break; } if (ok) return true; } return false; }
+    var exact = models.filter(function (m) { var nm = normModel(m); return nm && nm !== normModel(product) && hasRun(tokensOf(m)); });
+    if (exact.length) { var L = Math.max.apply(null, exact.map(function (m) { return normModel(m).length; })); return { models: exact.filter(function (m) { return normModel(m).length === L; }), reason: "exact" }; }
+    // 2. coded lines: "HMX I", "HMX IPO IRPO", "GTX L5 L30 L60", "HMX 200 IPO"
+    var coded = models.map(function (m) { return { m: m, c: parseCoded(m) }; }).filter(function (x) { return x.c; });
+    if (coded.length) {
+      var line = toks.filter(function (t) { return PRODUCT_LINES[t]; })[0] || null;
+      var nums = toks.filter(function (t) { return /^\d{3,4}$/.test(t); });
+      var suffixes = [];
+      toks.forEach(function (t) {
+        if (PRODUCT_LINES[t] || /^\d+$/.test(t)) return;
+        var letters = t.replace(/\d+/g, "").toUpperCase(); // "l5" / "l30" are size variants of the L pusher
+        if (letters && letters.length <= 5 && (parseCodeRun(letters) || /^[A-Z]{1,4}$/.test(letters)) && !/^(US|UK|EU|EMEA|A|PDF|V)$/.test(letters)) suffixes.push(letters);
+      });
+      suffixes = suffixes.filter(function (s, i, a) { return a.indexOf(s) === i; });
+      if (line && coded.some(function (x) { return x.c.line === line; })) {
+        var byLine = coded.filter(function (x) { return x.c.line === line; });
+        var hit = byLine.filter(function (x) { return (!nums.length || nums.indexOf(x.c.number) !== -1) && (!suffixes.length || suffixes.indexOf(x.c.suffix) !== -1); });
+        if (hit.length && (nums.length || suffixes.length)) return { models: hit.map(function (x) { return x.m; }), reason: "code" };
+        if (nums.length) { var byNum = byLine.filter(function (x) { return nums.indexOf(x.c.number) !== -1; }); if (byNum.length) return { models: byNum.map(function (x) { return x.m; }), reason: "number" }; }
+        return { models: [], reason: null };
+      }
+    }
+    // 3. variant phrases of descriptive models ("gondola", "partial pullout", "riser", "multistack", "hybrid")
+    var scored = models.map(function (m) {
+      var vt = variantTokens(m, product); if (!vt.length) return null;
+      var hitN = vt.filter(function (t) { return toks.indexOf(t) !== -1; }).length;
+      if (!hitN && squash.indexOf(vt.join("")) !== -1) hitN = vt.length; // "multistack" written as one word
+      return { m: m, vt: vt, score: hitN / vt.length };
+    }).filter(function (x) { return x && x.score >= 0.6; });
+    if (scored.length) {
+      // A variant named in full beats partial hits ("pullout gondola" is not "partial pullout gondola"); among
+      // equals, drop a variant whose tokens are a subset of a longer one ("gondola" under "pullout gondola").
+      var top = Math.max.apply(null, scored.map(function (x) { return x.score; }));
+      if (top >= 1) scored = scored.filter(function (x) { return x.score >= 1; });
+      var keep = scored.filter(function (x) { return !scored.some(function (y) { return y !== x && y.score >= x.score && y.vt.length > x.vt.length && x.vt.every(function (t) { return y.vt.indexOf(t) !== -1; }); }); });
+      return { models: keep.map(function (x) { return x.m; }), reason: "variant" };
+    }
+    return { models: [], reason: null };
+  }
+  var FANOUT_TYPES = { "Flyer": 1, "Product Overview": 1, "Spec Sheet": 1, "Cut Sheet": 1, "Assembly Instructions": 1, "Compliance & Testing": 1, "Warranty": 1, "Training": 1 };
+  // Which of a folder's candidate products a file belongs to. Named product (every word of its name present)
+  // wins; a line prefix (hpp/vpp/epp) next; a word common to ALL candidates ("Hoardmaster", "Hoardmaster") means
+  // the shared document goes to every candidate; a document on the base product also reaches the variant line
+  // that starts with its name (Hoardmaster → Hoardmaster Lite). [] = none of the candidates fit (a human picks).
+  function productsForFile(name, type, candidates) {
+    var toks = tokensOf(name), squash = toks.join("");
+    var named = candidates.filter(function (p) { var pt = tokensOf(p.name); return pt.length && pt.every(function (t) { return toks.indexOf(t) !== -1; }) || squash.indexOf(normModel(p.name)) !== -1; });
+    if (named.length) {
+      var L = Math.max.apply(null, named.map(function (p) { return normModel(p.name).length; }));
+      var best = named.filter(function (p) { return normModel(p.name).length === L; });
+      if (type && FANOUT_TYPES[type]) {
+        // A shared document on the named product also reaches every TICKED product whose name carries that
+        // product's name (Hoardmaster → Hoardmaster Lite, Displays with Hoardmaster; Goblet Rack → Goblet Rack for Dairy).
+        // The PM ticked them as "this folder covers them"; a render or photo stays with the named product.
+        best.forEach(function (b) { var nb = normModel(b.name); candidates.forEach(function (p) { var np = normModel(p.name); if (np !== nb && np.indexOf(nb) !== -1 && best.indexOf(p) === -1) best.push(p); }); });
+      }
+      return best;
+    }
+    var line = toks.filter(function (t) { return PRODUCT_LINES[t]; })[0];
+    if (line) { var lp = candidates.filter(function (p) { return p.name === PRODUCT_LINES[line]; }); if (lp.length) return lp; }
+    if (candidates.length === 1) return candidates.slice();
+    if (candidates.length > 1) {
+      // The family word on its own ("Flyer_Hoardmaster_A4") = shared by every candidate. Qualified by another word
+      // ("Spec Sheet_Controlled Hoardmaster") it names a product that is NOT one of them — a human decides.
+      var common = tokensOf(candidates[0].name).filter(function (t) { return candidates.every(function (p) { return tokensOf(p.name).indexOf(t) !== -1; }); });
+      var hit = common.filter(function (t) { return toks.indexOf(t) !== -1; });
+      if (hit.length) {
+        var qualified = hit.some(function (t) { var i = toks.indexOf(t), prev = toks[i - 1]; return prev && !TYPE_WORDS[prev] && !VARIANT_STOP[prev]; });
+        if (!qualified) return candidates.slice();
+      }
+    }
+    return [];
+  }
+  // One cell's new content when a product folder is approved: the links that are NOT on a legacy site stay,
+  // the planned files are added, duplicates (by file identity) collapse — planned spelling wins so the cell
+  // points at the file where it lives now. removed = how many current links are gone (declared to the shrink
+  // guard); changed = whether the write is needed at all (same set → skip, so untouched cells are never
+  // re-stamped and What's New stays honest).
+  // opts.folderUrl: the folder being approved. Its OWN files are governed by the plan — a link to one of them
+  // that this cell is not planned to hold is removed (that is how a render that was misfiled as a Flyer, or a
+  // duplicate row, is repaired by simply approving the folder again). Links to files elsewhere are kept.
+  // opts.folderFiles: the folder's listed file URLs. An Office file's link is a Doc.aspx form that names no folder
+  // (parentFolderOf → ""), so it is recognised by file identity against this list instead.
+  function planCellRelink(current, planned, opts) {
+    current = current || []; planned = planned || [];
+    var folderCanon = opts && opts.folderUrl ? canonFolderUrl(opts.folderUrl) : null;
+    var folderFiles = {}; ((opts && opts.folderFiles) || []).forEach(function (u) { var c = canonFileUrl(u); if (c) folderFiles[c] = 1; });
+    function inFolder(u) {
+      if (folderFiles[canonFileUrl(u)]) return true;
+      if (!folderCanon) return false;
+      var p = parentFolderOf(u); return !!p && canonFolderUrl(p) === folderCanon;
+    }
+    var final = [], seen = {};
+    planned.forEach(function (u) { var c = canonFileUrl(u); if (u && !seen[c]) { seen[c] = 1; final.push(u); } });
+    current.forEach(function (u) { if (!u || isLegacyUrl(u) || inFolder(u)) return; var c = canonFileUrl(u); if (!seen[c]) { seen[c] = 1; final.push(u); } });
+    var finalSet = {}; final.forEach(function (u) { finalSet[canonFileUrl(u)] = 1; });
+    var removed = current.filter(function (u) { return u && !finalSet[canonFileUrl(u)]; }).length;
+    return { final: final, removed: removed, changed: !sameUrlSet(current, final) };
+  }
+  // files: [{ name, url, fileId? }] · products: the folder's candidate products [{ name, models: [..] }] (the PM's
+  // picks). Returns { items: [{ name, url, fileId, type, how, products, models, scope, reason }], needsType, needsProduct }.
+  // scope: "pinned" (the name chose the models) · "product" (shared document → every model) · "base" (render/photo
+  // on the base model) · "candidates" (a number narrowed it but no code did — a pick, not a placement).
+  function planProductFolder(files, products, opts) {
+    opts = opts || {};
+    var items = [], needsType = [], needsProduct = [];
+    (files || []).forEach(function (f) {
+      var t = typeFromFileName(f.name);
+      var type = t.type || (opts.defaultType || null);
+      if (!type) { needsType.push({ name: f.name, url: f.url, fileId: f.fileId || null }); return; }
+      var prods = productsForFile(f.name, type, products || []);
+      if (!prods.length) { needsProduct.push({ name: f.name, url: f.url, fileId: f.fileId || null, type: type }); return; }
+      var models = [], scope = null, reason = null;
+      prods.forEach(function (p) {
+        var pin = pinModels(f.name, p.name, p.models || []);
+        if (pin.models.length) { pin.models.forEach(function (m) { if (models.indexOf(m) === -1) models.push(m); }); scope = pin.reason === "number" ? (scope || "candidates") : "pinned"; reason = reason || pin.reason; }
+      });
+      if (!models.length) {
+        if (FANOUT_TYPES[type]) { prods.forEach(function (p) { (p.models || []).forEach(function (m) { if (models.indexOf(m) === -1) models.push(m); }); }); scope = "product"; reason = "shared-document"; }
+        else {
+          prods.forEach(function (p) { var base = (p.models || []).filter(function (m) { return normModel(m) === normModel(p.name); }); (base.length ? base : (p.models || [])).forEach(function (m) { if (models.indexOf(m) === -1) models.push(m); }); });
+          scope = "base"; reason = "base-model";
+        }
+      }
+      items.push({ name: f.name, url: f.url, fileId: f.fileId || null, type: type, how: t.how, products: prods.map(function (p) { return p.name; }), models: models, scope: scope, reason: reason });
+    });
+    return { items: items, needsType: needsType, needsProduct: needsProduct };
+  }
+
   return {
     RESOURCES: RESOURCES, selectModelShareFiles: selectModelShareFiles,
+    LEGACY_SITES: LEGACY_SITES, isLegacyUrl: isLegacyUrl, typeFromFileName: typeFromFileName, leadTypeFromName: leadTypeFromName, stripLeadType: stripLeadType, productsForFolder: productsForFolder, productsForFile: productsForFile, pinModels: pinModels, planProductFolder: planProductFolder, planCellRelink: planCellRelink,
     pickThumb: pickThumb, memoPromise: memoPromise, makeSelection: makeSelection, selectionLabel: selectionLabel,
     filterSortModels: filterSortModels, availableAttrs: availableAttrs,
     computeCoverage: computeCoverage, looksLikeGibberish: looksLikeGibberish, normCell: normCell,
@@ -1011,6 +1469,8 @@
     lhCheckResource: lhCheckResource, lhRunPool: lhRunPool,
     osaWithin: osaWithin, fuzzyThreshold: fuzzyThreshold, fuzzyPenalty: fuzzyPenalty,
     codeTokenIn: codeTokenIn, searchMatch: searchMatch, tokenizeQuery: tokenizeQuery, expandSearchQuery: expandSearchQuery, normAlias: normAlias, SEARCH_ALIASES: SEARCH_ALIASES,
+    searchTokens: searchTokens, rankSearchHits: rankSearchHits, isCodeToken: isCodeToken, codeMatches: codeMatches, termIn: termIn,
+    MODEL_CODE_SET: MODEL_CODE_SET, MODEL_CODES: MODEL_CODES, DECODED_WORDS: DECODED_WORDS, parseCodeRun: parseCodeRun, modelCodes: modelCodes, resourceTypesInName: resourceTypesInName,
     expandName: expandName, resourceFromName: resourceFromName, guessPlacement: guessPlacement, parentFolderOf: parentFolderOf,
     wiredUrlSet: wiredUrlSet, deriveWatchedFolders: deriveWatchedFolders, planFolderPlacements: planFolderPlacements,
     folderWiredSet: folderWiredSet, planPlacementWrites: planPlacementWrites, planDocumentOps: planDocumentOps, catalogSnapshotStale: catalogSnapshotStale, sameUrlSet: sameUrlSet,

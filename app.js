@@ -56,6 +56,9 @@
     shield: '<path d="M12 3l7 3v5c0 4.4-3 8.4-7 9.5C8 19.4 5 15.4 5 11V6z"/><path d="m9 12 2 2 4-4"/>',
     train: '<path d="M22 10 12 5 2 10l10 5 10-5z"/><path d="M6 12v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5"/>',
     ext: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+    // Check mark = "it worked" on success toasts (F134). The arrow above means "opens somewhere else" and
+    // used to sit on every Saved/Updated/Deleted toast, where nothing opened anywhere.
+    check: '<path d="M20 6 9 17l-5-5"/>',
     alert: '<path d="M10.3 3.3 1.8 18a2 2 0 0 0 1.7 3h16.9a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
     edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>',
     sync: '<path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>',
@@ -229,7 +232,12 @@
   function apiFetch(path, opts) {
     opts = opts || {};
     if (!window.PF_getApiToken) return Promise.reject(new Error("Please sign in again."));
-    return window.PF_getApiToken().then(function (token) {
+    // passive: a background call. An expired session then REJECTS (code "session_expired") instead of
+    // redirecting the page to Microsoft mid-edit; the one sticky prompt below is the way back. (F112/F148)
+    return window.PF_getApiToken(opts.passive ? { passive: true } : undefined).catch(function (err) {
+      if (err && err.code === "session_expired") sessionExpired();
+      throw err;
+    }).then(function (token) {
       var init = { method: opts.method || "GET", headers: { Authorization: "Bearer " + token } };
       if (opts.body !== undefined) { init.headers["Content-Type"] = "application/json"; init.body = JSON.stringify(opts.body); }
       if (opts.fresh) init.cache = "no-store";
@@ -334,9 +342,21 @@
   function selectProduct(k) { sel.prod = k; sel.model = null; openFams[famOfKey(k)] = true; flashKey = k; pendingFocusKey = k; mobileRevealPending = true; renderColumns(); syncHash(); }
   function selectModel(k) { sel.model = k; flashKey = k; pendingFocusKey = k; mobileRevealPending = true; renderColumns(); syncHash(); }
   // Return to the top-level Find home (nothing selected) — where "Your Favorites" lives.
+  // The ONE programmatic way out of a search. Every path that leaves it — Home, a result click, a tab, a
+  // hash restore — must also forget the result facets, the pending debounce and the pending miss log:
+  // otherwise the next search started pre-filtered ("Has files" + Newest from last time), a 120 ms
+  // renderSearch could paint results over the view just chosen, and a half-typed word abandoned with Esc
+  // or a tab click was logged as demand (F172/F205/F206/F211). The input handler's own clear path keeps
+  // its restore-the-tab logic and resets the same things itself.
+  function clearSearch() {
+    if (searchInput) searchInput.value = "";
+    searchFilter = newFilterState();
+    if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+    clearTimeout(_missTimer);
+  }
   function goHome() {
     sel = { prod: null, model: null }; openFams = {}; flashKey = null; view = "catalog"; _preSearchView = null;
-    if (searchInput) searchInput.value = "";
+    clearSearch();
     render(); syncHash(); resetScroll();
   }
 
@@ -392,7 +412,7 @@
           fam.setAttribute("aria-controls", nestId);
           var nest = document.createElement("div"); nest.className = "tree-nest"; nest.id = nestId;
           if (f.products.length === 0) {
-            nest.innerHTML = '<div class="col-empty" data-anim="prowempty:' + escapeAttr(fk) + '">No products in this family yet — work in progress.</div>';
+            nest.innerHTML = '<div class="col-empty" data-anim="prowempty:' + escapeAttr(fk) + '">No products in this family yet.</div>';
           } else {
             f.products.forEach(function (p, i) {
               var pk = keyOf([c.name, f.name, p.name]), pc = productContent(p);
@@ -433,7 +453,10 @@
     det.appendChild(sum);
     var body = document.createElement("div"); body.className = "oc-body";
     C.families.forEach(function (ch) {
-      var has = familyContent(ch); // any linked collateral under this channel yet?
+      // Live = at least one usable linked document; familyContent() only asked whether model ROWS exist, so an
+      // empty channel wore a green dot over an empty body (F034). One list drives both the dot and the body.
+      var items = collectChannelCollateral(ch), has = items.length > 0;
+      var multi = (ch.products || []).reduce(function (n, p) { return n + (p.models || []).length; }, 0) > 1;
       var cd = document.createElement("details"); cd.className = "oc-channel";
       var cs = document.createElement("summary"); cs.className = "oc-channel-head";
       cs.innerHTML =
@@ -443,14 +466,14 @@
       cd.appendChild(cs);
       var cb = document.createElement("div"); cb.className = "oc-channel-body";
       if (!has) {
-        cb.innerHTML = '<div class="oc-empty">No collateral in this channel yet.</div>';
+        cb.innerHTML = '<div class="oc-empty">No collateral yet</div>';
       } else {
         // Flat list of every linked document under the channel (channels hold collateral directly, not a
         // product/model hierarchy). Each opens in the same viewer as any other resource.
-        collectChannelCollateral(ch).forEach(function (it) {
+        items.forEach(function (it) {
           var b = document.createElement("button"); b.type = "button"; b.className = "oc-doc";
-          b.innerHTML = '<span class="oc-doc-ico">' + svg(ICONS[iconFor(it.resource)]) + '</span><span class="oc-doc-name">' + escapeHtml(it.resource) + (it.links.length > 1 ? ' (' + it.links.length + ')' : '') + '</span><span class="oc-doc-open">' + svg(ICONS.ext) + '</span>';
-          b.addEventListener("click", function () { openResource(it.links, it.resource, it.model); });
+          b.innerHTML = '<span class="oc-doc-ico">' + svg(ICONS[iconFor(it.resource)]) + '</span><span class="oc-doc-name">' + escapeHtml((multi ? it.model + " · " : "") + it.resource) + (it.links.length > 1 ? ' (' + it.links.length + ')' : '') + '</span><span class="oc-doc-open">' + svg(ICONS.ext) + '</span>';
+          b.addEventListener("click", function () { openResource(it.links, it.model + " · " + it.resource, it.model); }); // the same title shape as every other caller — Copy link, usage logging and bug reports read the resource from it (F031)
           cb.appendChild(b);
         });
       }
@@ -467,7 +490,7 @@
       (p.models || []).forEach(function (m) {
         RESOURCE_TYPES.forEach(function (r) {
           var links = linksFor(m, r.name);
-          if (links && links.length) out.push({ model: m, resource: r.name, links: links });
+          if (links && links.length && usableLinked(m, r.name)) out.push({ model: m, resource: r.name, links: links });
         });
       });
     });
@@ -559,6 +582,7 @@
   }
   // Build the filter/sort bar. `availCodes` = attribute codes present in the pool; `count` = {shown,total,noun};
   // `defaultLabel` = label for the "" (unsorted) option; `rerender` repaints the surface in place.
+  var ftFocusKey = null; // which toolbar control was just used — renderSearch re-focuses it after the re-render (F032)
   function findToolbar(st, availCodes, count, defaultLabel, rerender) {
     var bar = document.createElement("div"); bar.className = "ftbar";
     // A radiogroup, not a row of toggles: these three are mutually exclusive, but aria-pressed announced
@@ -571,7 +595,8 @@
       b.textContent = o[1];
       b.setAttribute("role", "radio"); b.setAttribute("aria-checked", on ? "true" : "false");
       b.tabIndex = on ? 0 : -1; // roving tabindex: the whole group is one Tab stop; arrows move within it
-      b.addEventListener("click", function () { st.status = o[0]; rerender(); });
+      b.setAttribute("data-ft", "status:" + o[0]);
+      b.addEventListener("click", function () { st.status = o[0]; ftFocusKey = "status:" + o[0]; rerender(); });
       seg.appendChild(b);
     });
     seg.addEventListener("keydown", function (e) {
@@ -592,14 +617,16 @@
         var b = document.createElement("button"); b.type = "button"; b.className = "ft-chip" + (on ? " on" : "");
         b.textContent = MODEL_CODE_CHIP[c] || c; b.title = MODEL_CODES[c] || c;
         b.setAttribute("aria-pressed", on ? "true" : "false");
-        b.addEventListener("click", function () { var i = st.attrs.indexOf(c); if (i === -1) st.attrs.push(c); else st.attrs.splice(i, 1); rerender(); });
+        b.setAttribute("data-ft", "attr:" + c);
+        b.addEventListener("click", function () { var i = st.attrs.indexOf(c); if (i === -1) st.attrs.push(c); else st.attrs.splice(i, 1); ftFocusKey = "attr:" + c; rerender(); });
         chips.appendChild(b);
       });
       bar.appendChild(chips);
     }
     var rec = document.createElement("button"); rec.type = "button"; rec.className = "ft-chip ft-recent" + (st.recent ? " on" : "");
     rec.textContent = "Recently added"; rec.setAttribute("aria-pressed", st.recent ? "true" : "false");
-    rec.addEventListener("click", function () { st.recent = !st.recent; rerender(); });
+    rec.setAttribute("data-ft", "recent");
+    rec.addEventListener("click", function () { st.recent = !st.recent; ftFocusKey = "recent"; rerender(); });
     bar.appendChild(rec);
     var sortWrap = document.createElement("label"); sortWrap.className = "ft-sort";
     sortWrap.appendChild(Object.assign(document.createElement("span"), { className: "ft-sort-lbl", textContent: "Sort" }));
@@ -607,7 +634,8 @@
     [["", defaultLabel], ["name", "Name (A–Z)"], ["complete-desc", "Most complete"], ["complete-asc", "Least complete"], ["newest", "Newest"]].forEach(function (o) {
       var op = document.createElement("option"); op.value = o[0]; op.textContent = o[1]; if (st.sort === o[0]) op.selected = true; ssel.appendChild(op);
     });
-    ssel.addEventListener("change", function () { st.sort = ssel.value; rerender(); });
+    ssel.setAttribute("data-ft", "sort");
+    ssel.addEventListener("change", function () { st.sort = ssel.value; ftFocusKey = "sort"; rerender(); });
     sortWrap.appendChild(ssel); bar.appendChild(sortWrap);
     var right = document.createElement("div"); right.className = "ft-right";
     // Only when a filter has narrowed the set: unfiltered, this repeated the lead sentence word
@@ -619,7 +647,8 @@
     }
     if (filterActive(st) || st.sort) {
       var clr = document.createElement("button"); clr.type = "button"; clr.className = "ft-clear"; clr.textContent = "Clear";
-      clr.addEventListener("click", function () { st.status = "any"; st.attrs = []; st.recent = false; st.sort = ""; rerender(); });
+      clr.setAttribute("data-ft", "clear");
+      clr.addEventListener("click", function () { st.status = "any"; st.attrs = []; st.recent = false; st.sort = ""; ftFocusKey = "clear"; rerender(); });
       right.appendChild(clr);
     }
     bar.appendChild(right);
@@ -632,7 +661,7 @@
     // No product-wide "Copy all N links" here (removed 2026-09-14, owner decision): a rep sends files for ONE
     // model, and the model panel now lets them pick which — a whole-product dump was "too much".
     if (pb.p.models.length === 0) {
-      col._body.innerHTML = '<div class="col-empty">No models yet — work in progress.</div>';
+      col._body.innerHTML = '<div class="col-empty">No models yet.</div>';
       return col;
     }
     var usedCodes = {};
@@ -736,7 +765,7 @@
     // with no matching server remove, so the evicted pin returned on the next load and a different one
     // fell off — favorites appeared to shuffle by themselves.
     if (adding && a.length >= FAV_MAX) {
-      showError('<span>You’ve pinned the maximum of ' + FAV_MAX + ' favorites — remove one first.</span>', 6000);
+      showError('<span>You’ve reached the maximum of ' + FAV_MAX + ' favorites — remove one first.</span>', 6000);
       return false;
     }
     if (adding) a.unshift(m); else a.splice(i, 1);
@@ -751,7 +780,7 @@
   // plan's 12-function cap.)
   function favSync(action, model) {
     if (!window.PF_getApiToken) return;
-    return apiFetch("/api/me", { method: "POST", body: { action: action, model: model } })
+    return apiFetch("/api/me", { method: "POST", passive: true, body: { action: action, model: model } })
       // A 4xx (a rejected model name, a server-side cap) used to look like success and was re-sent on every
       // load. Don't interrupt the user — the local pin still works and the next load's merge retries — but
       // say so in the console instead of letting it vanish.
@@ -937,7 +966,7 @@
       return '<span class="cseg' + (usableLinked(m, r.name) ? ' on' : '') + '" data-cseg="' + i + '" data-anim="cseg:' + escapeAttr(sel.model) + ':' + i + '"></span>';
     }).join("");
     var label = complete ? '<b>Complete</b> · all ' + total + ' linked'
-      : linked === 0 ? 'Work in progress · <b>0</b> of ' + total + ' linked'
+      : linked === 0 ? 'Nothing linked yet · <b>0</b> of ' + total + ' linked'
       : '<b>' + linked + '</b> of ' + total + ' linked';
     cov.innerHTML = '<div class="cov-segs" aria-hidden="true">' + segs + '</div><div class="coverage-num' + (complete ? ' complete' : '') + '">' + label + '</div>';
     box.appendChild(cov);
@@ -1001,7 +1030,7 @@
         // Progress); everyone else (who can't see the PM tabs) is told it's already flagged + how to report it.
         var brokenTip = window.PF_isPM
           ? "This didn’t open when links were last checked" + healthWhen() + " — the file may be moved, deleted, or restricted. Re-run the link check from the To Do box on the Progress tab."
-          : "This didn’t open when links were last checked" + healthWhen() + " — the file may be moved, deleted, or you may not have access. The product team has been notified; you can also report it with the “Report a bug” button (bottom-right)."; // plain text: a title attribute renders markup literally
+          : "This didn’t open when links were last checked" + healthWhen() + " — the file may be moved, deleted, or you may not have access. The product team has been notified; you can also report it with the bug icon at the top of the page."; // plain text: a title attribute renders markup literally
         el.innerHTML = icon + body + '</span><span class="pill bad" title="' + escapeAttr(brokenTip) + '">' + svg(ICONS.alert) + ' Link issue</span>';
         var title = m + " · " + r.name;
         el.addEventListener("click", function (e) { resourceClick(e, arr, title, m); });
@@ -1076,19 +1105,24 @@
     return strip;
   }
 
-  // Shared "catalog isn't available" panel \u2014 used by every view so an outage never reads as "empty".
+  // The ONE "catalog isn't available" box (F136, owner decision 2026-10-07): a card with an alert icon, a bold
+  // line, one sentence and the actions on their own row — used by every view AND by search, so an outage
+  // never reads as "empty" or as a grey footnote. opts.denied = the 403 variant (this account isn't allowed:
+  // Sign out only, since "try again" produced a loop with no way out); opts.lead = a view-specific sentence.
+  function catalogOutage(opts) {
+    opts = opts || {};
+    var denied = !!opts.denied;
+    var title = denied ? "This account isn\u2019t authorized for Product Hub" : "Can\u2019t reach the catalog right now";
+    var lead = opts.lead || (denied
+      ? "It\u2019s for Grumbleton staff sign-ins. If you have a separate work account, sign out and use that one; otherwise ask the product team for access."
+      : "The product list couldn\u2019t be loaded. Try again in a moment; if it keeps happening, sign out and sign back in.");
+    return '<div class="cat-box outage" role="alert">' + svg(ICONS.alert) +
+      '<div class="outage-body"><div class="outage-title">' + title + '</div><div>' + lead + '</div>' +
+      '<div class="outage-actions">' + (denied ? '' : '<button class="wire-btn" id="catRetry" type="button">Try again</button>') +
+      '<button class="wire-btn" id="catSignOut" type="button">Sign out</button></div></div></div>';
+  }
   function catalogUnavailable(eyebrow, title) {
-    // A 403 is not an outage: the person is signed in to Microsoft but this account isn't allowed here (a
-    // B2B guest, or an address outside the allowed domains). Telling them to "refresh" produced a loop
-    // with no way out, so say what is actually true and offer the one action that can help.
-    if (catalogDenied) {
-      return head(eyebrow, title, "") +
-        '<div class="view view-note note-strong" role="alert">This account isn\u2019t authorized for Product Hub \u2014 it\u2019s for Grumbleton staff sign-ins. ' +
-        'If you have a separate work account, sign out and use that one; otherwise ask the product team for access.</div>';
-    }
-    return head(eyebrow, title, "") +
-      '<div class="view view-note note-strong" role="alert">The product catalog couldn\u2019t be loaded just now. ' +
-      '<button class="wire-btn" id="catRetry" type="button">Try again</button> If it keeps happening, sign out and sign back in.</div>';
+    return head(eyebrow, title, "") + '<div class="view">' + catalogOutage({ denied: catalogDenied }) + '</div>';
   }
   // A loading state so the first paint (before the Smartsheet fetch resolves) isn't a blank void.
   function renderLoading() {
@@ -1294,11 +1328,13 @@
      PM · WIRE TOOL (Add files) & MANAGE-DOCUMENT PANEL
      ============================================================ */
   // ---- Progress tool: wire a SharePoint folder to a product's resource, with a preview ----
+  // NOT on the page since 2026-10-07 (owner decision: one folder-linking method, productFolderPanel). Kept, with its
+  // bucket board and the family matcher, until the Product Management migration is through; then delete.
   function wirePanel(bare) {
     var box = document.createElement("div"); box.className = "wire";
     box.innerHTML =
       (bare ? '' : '<div class="wire-head" role="heading" aria-level="2">' + svg(ICONS.sync) + '<span>Link a folder</span></div>') +
-      '<p class="wire-lead">Link a SharePoint <b>folder</b> to a product’s resource, and new files added to that folder show up on this site automatically.</p>' +
+      '<p class="wire-lead">Pick a SharePoint <b>folder</b> and sort its files onto this product’s models. New files added to the folder later are suggested in <b>To Do › New on SharePoint</b> for you to approve.</p>' +
       '<p class="wire-steps">Choose the product&nbsp;→&nbsp;choose the resource type&nbsp;→&nbsp;paste the folder link&nbsp;→&nbsp;Preview, then Approve.</p>' +
       '<div class="wire-form">' +
         '<select class="wire-sel" id="wireProduct" aria-label="Product"></select>' +
@@ -1379,7 +1415,7 @@
       var resource = resSel.value, url = box.querySelector("#docPlaceUrl").value.trim();
       if (!resource) { showToast('<span>Choose a resource type first.</span>'); return; }
       if (!/^https?:\/\//i.test(url)) { showToast('<span>Paste a full https:// SharePoint file link.</span>'); return; }
-      if (looksLikeFolder(url)) { showToast('<span>That looks like a folder link — use <b>Link a folder</b> above. Paste a single <b>file</b> link here.</span>', 6000); return; }
+      if (looksLikeFolder(url)) { showToast('<span>That looks like a folder link — use <b>Add files › Link a product folder</b>. Paste a single <b>file</b> link here.</span>', 6000); return; }
       openDocPanel(url, resource, { mode: "new" });
     }
     box.querySelector("#docPlaceGo").addEventListener("click", go);
@@ -1414,7 +1450,7 @@
           renderWirePreview(box, { fam: fam, prod: prod, resource: resource, url: url, models: models, files: files, existing: existing });
         });
       });
-    }).catch(function (err) { result.innerHTML = '<div class="wire-msg err">Couldn’t open that as a folder (' + escapeHtml(String((err && err.message) || err)) + '). Make sure it’s a <b>folder</b> link (not a single file) — use <b>Copy link</b> on the folder in SharePoint. See “How do I get the folder link?” above.</div>'; })
+    }).catch(function (err) { result.innerHTML = '<div class="wire-msg err">Couldn’t open that as a folder (' + pmErr(err) + '). Make sure it’s a <b>folder</b> link (not a single file) — use <b>Copy link</b> on the folder in SharePoint. See “How do I get the folder link?” above.</div>'; })
       .then(function () { pvDone(); });
   }
   // ---- "One folder for every family" — spec-sheet / training bulk wire ----
@@ -1469,7 +1505,7 @@
         if (!matches.length) { showToast('<span>Pick a family for at least one file.</span>'); return; }
         wireFamSave(box, matches, resource, url, this);
       });
-    }).catch(function (err) { res.innerHTML = '<div class="wire-msg err">Couldn’t open that as a folder (' + escapeHtml(String((err && err.message) || err)) + '). Make sure it’s a <b>folder</b> link.</div>'; })
+    }).catch(function (err) { res.innerHTML = '<div class="wire-msg err">Couldn’t open that as a folder (' + pmErr(err) + '). Make sure it’s a <b>folder</b> link.</div>'; })
       .then(function () { mbDone(); });
   }
   // Fan each matched file out to EVERY model in its family and save — reusing the data-loss-safe
@@ -1520,7 +1556,7 @@
         });
         wireApprove({ resource: resource, url: url, targets: targets, assign: assign, existing: existing }, btn || box.querySelector("#wireFamMatch"));
       });
-    }).catch(function (err) { if (btn) { btn.disabled = false; btn.textContent = "Link to all families & save"; } showError('<span>Couldn’t prepare that (' + escapeHtml(String((err && err.message) || err)) + ').</span>', 7000); });
+    }).catch(function (err) { if (btn) { btn.disabled = false; btn.textContent = "Link to all families & save"; } showError('<span>Couldn’t prepare that (' + pmErr(err) + ').</span>', 7000); });
     });
   }
   var wireDrag = null, wireIid = 0; // id of the instance being dragged; instance-id counter
@@ -1722,7 +1758,7 @@
       paintDoc();
     }).catch(function (err) {
       if (docState !== st) return;
-      body.innerHTML = '<div class="wire-msg err">Couldn’t load this file’s placements (' + escapeHtml(String((err && err.message) || err)) + ').</div>';
+      body.innerHTML = '<div class="wire-msg err">Couldn’t load this file’s placements (' + pmErr(err) + ').</div>';
     });
   }
   function docPaintSummary() {
@@ -1934,7 +1970,7 @@
       refreshCovStats();
       var lead = done ? 'Saved ' + done + ' of ' + groups.length + ' products, then c' : 'C';
       if (isConflict(err)) showError('<span>' + lead + 'ouldn’t save the rest: another PM changed some of these links meanwhile. The panel now has the current links — click “Approve &amp; save” again.</span>', 12000);
-      else showError('<span>' + lead + 'ouldn’t finish saving (' + escapeHtml(String((err && err.message) || err)) + '). Click “Approve &amp; save” again to finish the rest.</span>', 9000);
+      else showError('<span>' + lead + 'ouldn’t finish saving (' + pmErr(err) + '). Click “Approve &amp; save” again to finish the rest.</span>', 9000);
       loadCatalog({ fresh: true }).then(function () { refreshCovStats(); repaintProgressSafely(); });
     });
     });
@@ -1983,7 +2019,12 @@
       opener + tag +
       (isFolder ? '' : wireMoveBtn(inst, currentKey)) +
       (isFolder ? '' : '<button class="wire-dup" type="button" data-id="' + inst.id + '" title="Duplicate — then move the copy to another model" aria-label="Duplicate ' + escapeAttr(inst.name) + '">' + DUPICON + '</button>') +
-      (isFolder ? '' : '<button class="wire-del" type="button" data-id="' + inst.id + '" title="Remove this file" aria-label="Remove ' + escapeAttr(inst.name) + '">' + DELICON + '</button>') +
+      // The folder chip can be removed too (F142): dropping it from the bucket is how a PM replaces an
+      // auto-updating folder with explicit files, or clears it. wireApprove counts the folder URL in `before`,
+      // so the removal is declared to the shrink guard and an emptied model is confirmed like any other.
+      (isFolder
+        ? '<button class="wire-del" type="button" data-id="' + inst.id + '" title="Remove this folder link — the model keeps its other files" aria-label="Remove the auto-updating folder link">' + DELICON + '</button>'
+        : '<button class="wire-del" type="button" data-id="' + inst.id + '" title="Remove this file" aria-label="Remove ' + escapeAttr(inst.name) + '">' + DELICON + '</button>') +
       '</span>';
   }
   function renderWirePreview(box, ctx) {
@@ -2033,12 +2074,12 @@
     function bucketByKey(key, label, insts, isNone) {
       var hasFolder = insts.some(function (i) { return i.folder; });
       var hasFile = insts.some(function (i) { return !i.folder; });
-      var note = (hasFolder && hasFile) ? '<div class="wire-note wire-warn">' + svg(ICONS.alert) + '<span><b>Heads up:</b> this model is linked to an <b>auto-updating folder</b>. Approving switches it to the <b>specific files</b> below — new files added to the folder later will <b>no longer appear automatically</b>. Remove the added files to keep the folder link.</span></div>' : '';
+      var note = (hasFolder && hasFile) ? '<div class="wire-note wire-warn">' + svg(ICONS.alert) + '<span><b>Heads up:</b> this model also shows everything in its <b>auto-updating folder</b>. The files below are added alongside it. The folder link stays; new files in the folder keep appearing on their own.</span></div>' : '';
       var actions = '';
       if (isNone && insts.length) {
         note = '<div class="wire-note">These aren’t on any model. On <b>Approve</b> they’ll be parked in the <b>Unsorted</b> pile to sort later — or handle them now:</div>';
         actions = '<div class="wire-none-actions">' +
-          '<button class="wire-btn" id="wireKeepAll" type="button">Keep all → Unsorted</button>' +
+          '<button class="wire-btn" id="wireKeepAll" type="button">Keep all → Unsorted pile</button>' +
           '<button class="wire-btn danger" id="wireDeleteAll" type="button">Discard all</button></div>';
       }
       return '<div class="wire-bucket' + (isNone ? ' wire-unmatched' : '') + '" data-key="' + escapeAttr(key) + '">' +
@@ -2104,8 +2145,15 @@
     });
   }
   function wireRemove(box, ctx, id) {
-    Object.keys(ctx.assign).forEach(function (mk) { ctx.assign[mk] = ctx.assign[mk].filter(function (x) { return String(x.id) !== String(id); }); });
+    var gone = null, bk = null;
+    Object.keys(ctx.assign).forEach(function (mk) { ctx.assign[mk] = ctx.assign[mk].filter(function (x) { if (String(x.id) === String(id)) { gone = x; bk = mk; return false; } return true; }); });
     renderWireBuckets(box, ctx);
+    // The re-render dropped focus to <body>: land it on the next chip in the same bucket, or the bucket itself (F117).
+    var host = box.querySelector("#wireBuckets");
+    var bucket = host && host.querySelector('.wire-bucket[data-key="' + cssEsc(bk || "__none") + '"]');
+    var next = bucket && (bucket.querySelector(".wire-open[tabindex]") || bucket.querySelector("button, [tabindex]"));
+    if (next && next.focus) next.focus();
+    if (srAnnounce && gone) srAnnounce.textContent = "Removed " + (gone.name || "file") + " from " + wireBucketLabel(ctx, bk);
   }
   function wireDrop(box, ctx, targetKey) {
     var id = wireDrag; wireDrag = null; if (!id) return;
@@ -2282,8 +2330,13 @@
     var src = null, bk = null;
     Object.keys(ctx.assign).forEach(function (mk) { ctx.assign[mk].forEach(function (x) { if (String(x.id) === String(id)) { src = x; bk = mk; } }); });
     if (!src || src.folder) return;
-    ctx.assign[bk].push(wireInst(src, false)); // a fresh copy (drag it onto another model)
+    var copy = wireInst(src, false);
+    ctx.assign[bk].push(copy); // a fresh copy (drag it onto another model)
     renderWireBuckets(box, ctx);
+    var host = box.querySelector("#wireBuckets");
+    var el = host && host.querySelector('.wire-file[data-id="' + copy.id + '"] .wire-open');
+    if (el && el.focus) el.focus();
+    if (srAnnounce) srAnnounce.textContent = "Duplicated " + (src.name || "file");
   }
   // "Copy to every model" — fan one file out to ALL models of the SELECTED product at once (e.g. a
   // spec sheet identical across models), instead of dragging it onto each model one by one. Only the
@@ -2301,7 +2354,10 @@
       n++;
     });
     renderWireBuckets(box, ctx);
-    showToast(svg(ICONS.ext) + '<span>Copied “' + escapeHtml(src.name || "file") + '” to ' + n + ' model' + (n === 1 ? "" : "s") + '.</span>');
+    var host = box.querySelector("#wireBuckets");
+    var back = host && host.querySelector('.wire-file[data-id="' + src.id + '"] .wire-open');
+    if (back && back.focus) back.focus();
+    showToast(svg(ICONS.check) + '<span>Copied “' + escapeHtml(src.name || "file") + '” to ' + n + ' model' + (n === 1 ? "" : "s") + '.</span>');
   }
   function wireApprove(ctx, btn) {
     var btnDone = busyButton(btn, "Saving…");
@@ -2363,7 +2419,7 @@
     if (!list.length && !noneItems.length) {
       btnDone();
       if (skipped.length) { showError('<span>Couldn’t read the current links for ' + skipped.length + ' model' + (skipped.length === 1 ? '' : 's') + ' just now — nothing was saved, so their existing links are untouched. Please re-open the folder and try again in a moment.</span>', 9000); }
-      else showToast('<span>Nothing to save yet — drag files onto a model, or use the Unsorted buttons below.</span>');
+      else showToast('<span>Nothing to save yet — drag files onto a model, or use the Unsorted-pile buttons below.</span>');
       return;
     }
     // Guard against silent link loss: if Approve would clear a model that currently has a link (the PM
@@ -2433,7 +2489,7 @@
       // (cache-bypassing) so anything already saved is reflected, and invite a retry — re-sending an
       // already-saved product is idempotent, so Approve again finishes the rest without a full page reload.
       if (isConflict(err)) showError('<span>Another PM changed these links since you opened the folder, so nothing was saved. Click Preview again to see the current links, then sort.</span>', 12000);
-      else showError('<span>Couldn’t finish saving (' + escapeHtml(String((err && err.message) || err)) + '). Some products may have saved — click “Approve &amp; save” again to finish the rest.</span>', 9000);
+      else showError('<span>Couldn’t finish saving (' + pmErr(err) + '). Some products may have saved — click “Approve &amp; save” again to finish the rest.</span>', 9000);
       // Refresh the DATA only. Re-rendering Progress here threw away the preview — and every file the PM
       // had sorted — that the message tells them to click again (F026).
       loadCatalog({ fresh: true }).then(refreshCovStats);
@@ -2453,10 +2509,10 @@
     apiFetch("/api/unsorted", { method: "POST", body: { action: "add", items: items } })
       .then(function (res) {
         ctx.assign.__none = []; renderWireBuckets(box, ctx);
-        showToast(svg(ICONS.ext) + '<span>' + (res.added || 0) + ' file' + (res.added === 1 ? '' : 's') + ' saved to the pile.</span>');
+        showToast(svg(ICONS.check) + '<span>' + (res.added || 0) + ' file' + (res.added === 1 ? '' : 's') + ' saved to the pile.</span>');
       }).catch(function (err) {
-        if (btn) { btn.disabled = false; btn.textContent = "Keep all → Unsorted"; }
-        showError('<span>Couldn’t save to Unsorted (' + escapeHtml(String((err && err.message) || err)) + ').</span>', 7000);
+        if (btn) { btn.disabled = false; btn.textContent = "Keep all → Unsorted pile"; }
+        showError('<span>Couldn’t save to the pile (' + pmErr(err) + ').</span>', 7000);
       });
   }
 
@@ -2468,7 +2524,7 @@
     var box = document.createElement("div"); box.className = "wire unsorted";
     box.innerHTML =
       (bare ? '' : '<div class="wire-head" role="heading" aria-level="2">' + svg(ICONS.folder) + '<span>The pile</span><span class="uns-count" id="unsCount"></span></div>') +
-      '<p class="wire-lead">Stray files — parked from the folder tool, or found sitting in a shared folder with a name that matches no model. Preview each, then sort it into a product &amp; model; it’s linked there (merged with anything already saved) and drops off this list.</p>' +
+      '<p class="wire-lead">Stray files — parked from Add files, or found sitting in a shared folder with a name that matches no model. Preview each, then sort it into a product &amp; model; it’s linked there (merged with anything already saved) and drops off this list.</p>' +
       '<div id="unsList"><div class="wire-msg">Loading…</div></div>';
     loadUnsorted(box);
     return box;
@@ -2476,7 +2532,7 @@
   function loadUnsorted(box) {
     var list = box.querySelector("#unsList"); if (!list) return;
     if (!window.PF_getToken) { list.innerHTML = '<div class="wire-msg err">Please sign in again.</div>'; return; }
-    // The pile is two sources rendered as one list: files a PM parked from the folder tool (/api/unsorted)
+    // The pile is two sources rendered as one list: files a PM parked from Add files (/api/unsorted)
     // AND orphan files the nightly scan found loose in a shared folder (resolved client-side). Orphans are
     // best-effort — resolveOrphanItems never rejects, so only an /api/unsorted failure surfaces an error.
     // Generation guard: a Save/Remove triggers a reload while an earlier one may still be resolving; only the
@@ -2506,7 +2562,7 @@
       });
       renderUnsorted(box, parked.concat(orphans));
     })
-      .catch(function (err) { if (!live()) return; list.innerHTML = '<div class="wire-msg err">Couldn’t load the pile (' + escapeHtml(String((err && err.message) || err)) + ').</div>'; if (box._onError) box._onError(); });
+      .catch(function (err) { if (!live()) return; list.innerHTML = '<div class="wire-msg err">Couldn’t load the pile (' + pmErr(err) + ').</div>'; if (box._onError) box._onError(); });
   }
   // --- Orphan folder files (from the nightly cron): files sitting in a SHARED auto-linked folder whose
   // names match no model, so they surface nowhere. Folded into the Sort-the-Pile list as actionable rows:
@@ -2518,6 +2574,14 @@
   function orphanKey(o) { var fu = o.folderUrl || ""; return (window.PF && PF.canonFolderUrl ? PF.canonFolderUrl(fu) : fu) + "|" + (o.file || o.name || ""); }
   function orphanDismissed() { try { var a = JSON.parse(localStorage.getItem("pf-orphan-done") || "[]"); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
   function orphanDismiss(key) { var a = orphanDismissed(); if (a.indexOf(key) === -1) a.unshift(key); try { localStorage.setItem("pf-orphan-done", JSON.stringify(a.slice(0, 500))); } catch (e) {} }
+  function orphanUndismiss(key) { try { localStorage.setItem("pf-orphan-done", JSON.stringify(orphanDismissed().filter(function (k) { return k !== key; }))); } catch (e) {} }
+  // Undo of an orphan "Hide" (F190): the local key goes at once; the server tombstone (written best-effort by
+  // the hide) is deleted the same way, then the pile reloads so the file is listed again.
+  function orphanUndo(box, it) {
+    orphanUndismiss(orphanKey(it));
+    (it.url ? ftpMark("undismiss", it) : Promise.resolve()).then(function () { loadUnsorted(box); })
+      .catch(function (e) { loadUnsorted(box); showError('<span>Shown again here, but the hide couldn’t be undone for everyone. ' + pmErr(e) + '</span>', 7000); });
+  }
   function orphanItem(o, f) {
     return { name: o.file, file: o.file, resource: o.resource, folderUrl: o.folderUrl, detail: o.detail,
       orphan: true, url: f ? f.url : "", fileId: f ? f.fileId : null, unresolved: !(f && f.url) };
@@ -2536,14 +2600,20 @@
     if (_orphanCache && _orphanCache.sig === sig) return Promise.resolve(_orphanCache.items.slice());
     if (!pending.length || !window.PF_getToken) { _orphanCache = { sig: sig, items: [] }; return Promise.resolve([]); }
     return window.PF_getToken().then(function (token) {
-      var bearer = "Bearer " + token, byFolder = {};
+      var bearer = "Bearer " + token, byFolder = {}, failed = false;
       pending.forEach(function (o) { (byFolder[o.folderUrl] = byFolder[o.folderUrl] || []).push(o); });
       return Promise.all(Object.keys(byFolder).map(function (fu) {
         return fetchFolderChildren(fu, bearer).then(function (files) {
           var byName = {}; files.forEach(function (f) { byName[f.name] = f; });
-          return byFolder[fu].map(function (o) { return orphanItem(o, byName[o.file]); });
-        }).catch(function () { return byFolder[fu].map(function (o) { return orphanItem(o, null); }); });
-      })).then(function (groups) { var out = groups.reduce(function (a, b) { return a.concat(b); }, []); _orphanCache = { sig: sig, items: out }; return out.slice(); });
+          // The folder listed fine and the file is not in it: it was renamed, moved or deleted — no longer an
+          // orphan, so it drops out (it used to render as "couldn't read this folder") (F046).
+          return byFolder[fu].map(function (o) { return byName[o.file] ? orphanItem(o, byName[o.file]) : null; }).filter(Boolean);
+        }).catch(function () { failed = true; return byFolder[fu].map(function (o) { return orphanItem(o, null); }); });
+      })).then(function (groups) {
+        var out = groups.reduce(function (a, b) { return a.concat(b); }, []);
+        if (!failed) _orphanCache = { sig: sig, items: out }; // a transient folder failure is retried on the next paint, not cached for the session
+        return out.slice();
+      });
     }).catch(function () { return []; });
   }
   // --- Multi-select model picker (checkbox dropdown) for the Unsorted "Sort to models" control ---
@@ -2718,7 +2788,7 @@
     var hadFocus = box.contains(document.activeElement); // capture NOW (synchronously), before any async reload moves it
     // An orphan has no Unsorted-sheet row — "hide" just tombstones it locally so it drops off this list.
     // (The nightly scan keeps its own list; once the file is linked or renamed it stops being flagged there.)
-    if (it.orphan) { orphanDismiss(orphanKey(it)); if (it.url) ftpMark("dismiss", it).catch(function () {}); /* server tombstone so the hide holds for every PM/device (best-effort) */ showToast('<span>Hidden. It’ll stay off once it’s linked or renamed.</span>'); if (hadFocus) _pileFocusPending = true; loadUnsorted(box); return; }
+    if (it.orphan) { orphanDismiss(orphanKey(it)); if (it.url) ftpMark("dismiss", it).catch(function () {}); /* server tombstone so the hide holds for every PM/device (best-effort) */ showToast('<span>Hidden for everyone.</span>', 8000, { label: "Undo", onClick: function () { orphanUndo(box, it); } }); if (hadFocus) _pileFocusPending = true; loadUnsorted(box); return; }
     pfConfirm({
       title: "Remove from the pile?",
       body: ["Remove “" + (it.name || "this file") + "” from the pile?",
@@ -2729,14 +2799,14 @@
     btn.disabled = true;
     apiFetch("/api/unsorted", { method: "POST", body: { action: "remove", rowIds: [it.id] } })
       .then(function () { showToast('<span>Removed from the pile.</span>'); if (hadFocus) _pileFocusPending = true; loadUnsorted(box); })
-      .catch(function (err) { btn.disabled = false; showError('<span>Couldn’t remove (' + escapeHtml(String((err && err.message) || err)) + ').</span>', 7000); });
+      .catch(function (err) { btn.disabled = false; showError('<span>Couldn’t remove (' + pmErr(err) + ').</span>', 7000); });
     });
   }
   function unsortedAssign(box, it, prodVal, targets, btn) {
     var hadFocus = box.contains(document.activeElement); // capture before the confirm/async reload moves focus
     if (!prodVal || !targets || !targets.length) { showToast('<span>Pick a product and at least one model.</span>'); return; }
     var resource = it.resource || "";
-    if (!resource) { showToast('<span>This file has no resource type recorded — sort it via the folder tool instead.</span>'); return; }
+    if (!resource) { showToast('<span>This file has no resource type recorded — sort it through Add files › Link a product folder instead.</span>'); return; }
     var parts = prodVal.split("§"), fam = parts[0], prod = parts[1];
     pfConfirmIf(targets.length > 1, {
       title: "Add to " + targets.length + " models?",
@@ -2815,7 +2885,7 @@
     }).catch(function (err) {
       btnDone();
       if (isConflict(err)) { loadCatalog({ fresh: true }); showError('<span>Another PM changed ' + escapeHtml(resource) + ' on one of these models since this page loaded, so nothing was saved. The page now has the current links — click Save again.</span>', 12000); return; }
-      showError('<span>Couldn’t sort (' + escapeHtml(String((err && err.message) || err)) + ').</span>', 7000);
+      showError('<span>Couldn’t sort (' + pmErr(err) + ').</span>', 7000);
     });
     });
   }
@@ -2894,7 +2964,11 @@
     if (!target) { if (fallbackPath) openTo(fallbackPath, true); return; } // shouldn't happen; degrade to navigation
     // Render only when the matrix isn't already on screen: re-rendering Progress from a To-do Fix wiped any
     // other section's open editor, staged edits and all (F027).
-    if (view !== "progress" || !document.querySelector(".cov-group")) { view = "progress"; render(); } // renders the matrix synchronously so the group is in the DOM below
+    // "Only models missing links" hides a fully-linked model from the matrix AND from the editor it opens, so
+    // Fix on such a model found nothing and silently did nothing (F054). The filter is a view preference;
+    // a Fix click outranks it. The checkbox re-renders from the variable, so it stays consistent.
+    var wasFiltered = covIncompleteOnly; covIncompleteOnly = false;
+    if (wasFiltered || view !== "progress" || !document.querySelector(".cov-group")) { view = "progress"; render(); } // renders the matrix synchronously so the group is in the DOM below
     var grp = null;
     [].forEach.call(document.querySelectorAll(".cov-group"), function (el) { if (el.dataset.prod === target.prod && el.dataset.fam === target.fam) grp = el; });
     if (!grp) return;
@@ -2963,12 +3037,19 @@
     // land on top of the link just added.
     function availResources(model) {
       return RESOURCE_TYPES.filter(function (r) {
-        if (linksFor(model, r.name).length || isAdd(model, r.name)) return false;
+        // A resource whose every link is staged for removal is free again — that is how a broken link gets
+        // REPLACED in one edit (remove, then add); the picker used to hide it until the removal was saved (F025).
+        var links = linksFor(model, r.name);
+        var allGone = links.length > 0 && links.every(function (l) { return isDel(model, r.name, l.url); });
+        if ((links.length && !allGone) || isAdd(model, r.name)) return false;
         if (isNaAdd(model, r.name)) return false;
         return !(naFor(model, r.name) && !isNaUndo(model, r.name));
       }).map(function (r) { return r.name; });
     }
-    function paint() {
+    // Every chip action re-renders the whole editor, which dropped keyboard focus to <body> (F117). \`focus\`
+    // says where it goes afterwards: { sel } an exact control, else { model } that model's "+ Add a link"
+    // button; { say } is read out through the live region.
+    function paint(focus) {
       // Marks the section as holding unsaved edits, for the leave-page prompt (pmHasStagedEdits).
       grp.classList.toggle("has-staged", !!(dels.length || adds.length || naAdd.length || naUndo.length));
       body.innerHTML = models.map(function (m) {
@@ -3001,16 +3082,29 @@
           '<div class="cov-ed-addwrap" data-m="' + escapeAttr(m.name) + '"><button class="cov-ed-add" type="button">+ Add a link</button><button class="cov-ed-add cov-ed-na" type="button" title="Mark a resource that doesn’t apply to this model, so it isn’t counted as missing">Mark N/A</button></div></div>';
       }).join("");
       wire();
+      if (focus) {
+        var fEl = (focus.sel && body.querySelector(focus.sel)) || (focus.model && body.querySelector('.cov-ed-addwrap[data-m="' + cssEsc(focus.model) + '"] .cov-ed-add:not(.cov-ed-na)'));
+        if (fEl && fEl.focus) fEl.focus();
+        if (focus.say && srAnnounce) srAnnounce.textContent = focus.say;
+      }
     }
     function wire() {
       [].forEach.call(body.querySelectorAll(".cov-chip-act.manage"), function (b) {
         b.addEventListener("click", function () { var c = b.closest(".cov-chip"); openDocPanel(c.getAttribute("data-u"), c.getAttribute("data-r"), { mode: "manage" }); });
       });
       [].forEach.call(body.querySelectorAll(".cov-chip-act.del"), function (b) {
-        b.addEventListener("click", function () { var c = b.closest(".cov-chip"); dels.push({ model: c.getAttribute("data-m"), resource: c.getAttribute("data-r"), url: c.getAttribute("data-u") }); paint(); });
+        b.addEventListener("click", function () {
+          var c = b.closest(".cov-chip"), m = c.getAttribute("data-m"), r = c.getAttribute("data-r"), u = c.getAttribute("data-u");
+          dels.push({ model: m, resource: r, url: u });
+          paint({ sel: '.cov-chip[data-m="' + cssEsc(m) + '"][data-r="' + cssEsc(r) + '"][data-u="' + cssEsc(u) + '"] .cov-chip-act.undo', model: m, say: "Marked " + (c.querySelector(".cov-chip-name") || {}).textContent + " for removal — undo is available" });
+        });
       });
       [].forEach.call(body.querySelectorAll(".cov-chip-act.undo"), function (b) {
-        b.addEventListener("click", function () { var c = b.closest(".cov-chip"); dels = dels.filter(function (d) { return !(d.model === c.getAttribute("data-m") && d.resource === c.getAttribute("data-r") && d.url === c.getAttribute("data-u")); }); paint(); });
+        b.addEventListener("click", function () {
+          var c = b.closest(".cov-chip"), m = c.getAttribute("data-m"), r = c.getAttribute("data-r"), u = c.getAttribute("data-u");
+          dels = dels.filter(function (d) { return !(d.model === m && d.resource === r && d.url === u); });
+          paint({ sel: '.cov-chip[data-m="' + cssEsc(m) + '"][data-r="' + cssEsc(r) + '"][data-u="' + cssEsc(u) + '"] .cov-chip-act.del', model: m, say: "Kept " + (c.querySelector(".cov-chip-name") || {}).textContent });
+        });
       });
       // Preview the actual file before removing it — the whole point of showing one chip per file.
       [].forEach.call(body.querySelectorAll(".cov-chip-prev"), function (nameEl) {
@@ -3022,14 +3116,18 @@
         nameEl.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
       });
       [].forEach.call(body.querySelectorAll(".cov-chip-act.unadd"), function (b) {
-        b.addEventListener("click", function () { var c = b.closest(".cov-chip"); adds = adds.filter(function (a) { return !(a.model === c.getAttribute("data-m") && a.resource === c.getAttribute("data-r")); }); paint(); });
+        b.addEventListener("click", function () {
+          var c = b.closest(".cov-chip"), m = c.getAttribute("data-m"), r = c.getAttribute("data-r");
+          adds = adds.filter(function (a) { return !(a.model === m && a.resource === r); });
+          paint({ model: m, say: "Removed the new " + r + " link" });
+        });
       });
       [].forEach.call(body.querySelectorAll(".cov-chip-act.naundo"), function (b) {
         b.addEventListener("click", function () {
           var c = b.closest(".cov-chip"), m = c.getAttribute("data-m"), r = c.getAttribute("data-r");
           if (isNaAdd(m, r)) naAdd = naAdd.filter(function (x) { return !(x.model === m && x.resource === r); }); // cancel a staged mark
           else naUndo.push({ model: m, resource: r }); // un-mark an already-saved N/A (becomes "not linked")
-          paint();
+          paint({ model: m, say: r + " is no longer marked not applicable" });
         });
       });
       [].forEach.call(body.querySelectorAll(".cov-ed-na"), function (b) {
@@ -3039,8 +3137,8 @@
           if (!avail.length) { showToast('<span>Nothing to mark — every resource here is already linked, work in progress, or N/A.</span>'); return; }
           wrap.innerHTML = '<select class="wire-sel cov-na-res" aria-label="Resource type to mark not applicable">' + avail.map(function (n) { return '<option value="' + escapeAttr(n) + '">' + escapeHtml(n) + '</option>'; }).join("") + '</select>' +
             '<button class="wire-btn cov-na-ok" type="button">Mark N/A</button><button class="wire-btn cov-na-cancel" type="button">Cancel</button>';
-          wrap.querySelector(".cov-na-cancel").addEventListener("click", function () { paint(); });
-          wrap.querySelector(".cov-na-ok").addEventListener("click", function () { naAdd.push({ model: model, resource: wrap.querySelector(".cov-na-res").value }); paint(); });
+          wrap.querySelector(".cov-na-cancel").addEventListener("click", function () { paint({ model: model }); });
+          wrap.querySelector(".cov-na-ok").addEventListener("click", function () { var rn = wrap.querySelector(".cov-na-res").value; naAdd.push({ model: model, resource: rn }); paint({ model: model, say: rn + " marked not applicable" }); });
         });
       });
       [].forEach.call(body.querySelectorAll(".cov-ed-add:not(.cov-ed-na)"), function (b) {
@@ -3051,7 +3149,7 @@
             '<input class="cov-add-url" type="url" placeholder="Paste a SharePoint link" aria-label="SharePoint link" />' +
             '<button class="wire-btn cov-add-ok" type="button">Add</button><button class="wire-btn cov-add-cancel" type="button">Cancel</button>';
           var urlEl = wrap.querySelector(".cov-add-url"); urlEl.focus();
-          wrap.querySelector(".cov-add-cancel").addEventListener("click", function () { addSeq++; paint(); });
+          wrap.querySelector(".cov-add-cancel").addEventListener("click", function () { addSeq++; paint({ model: model }); });
           wrap.querySelector(".cov-add-ok").addEventListener("click", function () {
             var okB = wrap.querySelector(".cov-add-ok");
             var res = wrap.querySelector(".cov-add-res").value, url = urlEl.value.trim();
@@ -3068,7 +3166,7 @@
               var nm = "";
               try { nm = decodeURIComponent((String(n.url).split(/[?#]/)[0].split("/").pop() || "")).replace(/\.[a-z0-9]+$/i, ""); } catch (e) {}
               adds.push({ model: model, resource: res, url: n.url, name: nm || null });
-              paint();
+              paint({ model: model, say: "Added " + (nm || res) + " — save to make it live" });
             });
           });
           urlEl.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); wrap.querySelector(".cov-add-ok").click(); } });
@@ -3169,7 +3267,7 @@
         var lead = landed.length ? 'Saved ' + escapeHtml(landed.join(", ")) + ', but couldn’t save the rest' : 'Couldn’t save';
         if (isConflict(err)) showError('<span>' + lead + ' — another PM changed it since you opened the editor. Your changes are still staged over the current links: check them and Save again.</span>', 15000);
         else if (err && err.status === 409) showError('<span>' + (landed.length ? lead + '. ' : '') + escapeHtml(String(err.message)) + '</span>', 15000);
-        else showError('<span>' + lead + ' (' + escapeHtml(String((err && err.message) || err)) + '). Your changes are still staged — Save again to finish.</span>', 9000);
+        else showError('<span>' + lead + ' (' + pmErr(err) + '). Your changes are still staged — Save again to finish.</span>', 9000);
         refreshCovStats();
         // Rebuild from the sheet as it is now, keeping the staged edits: the next Save's base is current.
         loadCatalog({ fresh: true }).then(function () { refreshCovStats(); paint(); });
@@ -3210,7 +3308,19 @@
   // Clear a link's health flag after the PM re-wires it: drop it from the local run map AND the
   // server map, and remember it in healthCleared so the post-save catalog reload (which re-seeds
   // serverHealth from the pre-fix cron data) doesn't resurrect the stale "Link issue".
-  function clearHealthFor(key) { delete healthMap[key]; delete serverHealth[key]; healthCleared[key] = 1; }
+  function clearHealthFor(key) {
+    delete healthMap[key]; delete serverHealth[key]; healthCleared[key] = 1;
+    // Persist the cleared flag too: memory-only meant a reload resurrected "Link issue" on a link the PM
+    // had just fixed, because the stored local run still carried it (F048).
+    try {
+      var st = JSON.parse(localStorage.getItem(HEALTH_KEY) || "null");
+      if (st && st.map && st.map[key]) {
+        delete st.map[key];
+        st.problems = (st.problems || []).filter(function (p) { return (p.model + "::" + p.resource) !== key; });
+        localStorage.setItem(HEALTH_KEY, JSON.stringify(st));
+      }
+    } catch (e) {}
+  }
   function healthAgo() {
     // Use whichever run healthStatusFor is actually reading from (a local manual run, or the daily
     // server cron) so the "last checked" note is right for everyone — incl. salespeople with no local run.
@@ -3263,6 +3373,14 @@
   // way a person would, and the existing /api/wire-links to save. Nothing is written without a click. ----
   function ftpDismissed() { try { var a = JSON.parse(localStorage.getItem("pf-place-done") || "[]"); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
   function ftpDismiss(url) { var a = ftpDismissed(); if (a.indexOf(url) === -1) a.unshift(url); try { localStorage.setItem("pf-place-done", JSON.stringify(a.slice(0, 500))); } catch (e) {} }
+  function ftpUndismiss(url) { try { localStorage.setItem("pf-place-done", JSON.stringify(ftpDismissed().filter(function (u) { return u !== url; }))); } catch (e) {} }
+  // Undo of "Never suggest" (F190): a dismissal is a TEAM-wide tombstone, so the undo must reach the server
+  // too — then the panel reloads from the server and the row is back. A failed undo says so; the file stays
+  // hidden rather than half-undone.
+  function ftpUndo(x, box) {
+    ftpMark("undismiss", x).then(function () { ftpUndismiss(x.url); loadFilesToPlace(box); })
+      .catch(function (e) { showError('<span>Couldn’t undo — “' + escapeHtml(x.file) + '” stays hidden. ' + pmErr(e) + '</span>', 7000); });
+  }
   // ONE reader for /api/placements. Progress used to fetch it twice per render (the orphan pile and the
   // Files-to-place scan each pulled the same ~39 KB, 300-1200 ms each). Memoised for 30 s and invalidated
   // by every write below, so a Keep/Remove is visible on the very next read. Rejects on a non-2xx so each
@@ -3410,7 +3528,7 @@
     var box = document.createElement("details"); box.className = "wire files-to-place";
     box.innerHTML =
       '<summary class="wire-head">' + svg(ICONS.clock) + '<span>New on SharePoint</span><span class="ftp-badge" hidden></span></summary>' +
-      '<div class="ui-body"><p class="wire-lead">Finds files in your resource folders that aren’t linked to a product yet. <b>Every night this runs on its own</b> and <b>suggests</b> the confident matches — nothing goes on the live site until you click <b>Keep</b>. Anything it wasn’t sure about asks you to pick.</p>' +
+      '<div class="ui-body"><p class="wire-lead">Finds files in your resource folders that aren’t linked to a product yet. <b>Every night this runs on its own</b> and <b>suggests</b> the confident matches — nothing goes on the live site until you click <b>Add</b>. Anything it wasn’t sure about asks you to pick.</p>' +
       '<div class="ftp-bar"><button class="wire-btn ftp-rescan" type="button">Re-scan now</button>' +
       '<span class="ftp-bar-note">Runs the nightly scan on demand — it shows you what it found before anything is added.</span></div>' +
       '<div id="ftpResults"><div class="wire-msg">Scanning…</div></div></div>';
@@ -3462,12 +3580,12 @@
       host.querySelector(".ftp-go").addEventListener("click", function () {
         var goDone = busyButton(this, "Adding…");
         call(false).then(function (res) {
-          showToast(svg(ICONS.sync) + '<span>Added ' + res.suggested + ' suggestion' + (res.suggested === 1 ? '' : 's') + ' to the review list below. Nothing is live until you Keep them.</span>');
+          showToast(svg(ICONS.sync) + '<span>Added ' + res.suggested + ' suggestion' + (res.suggested === 1 ? '' : 's') + ' to the review list below. Nothing is live until you add them.</span>');
           placementsStore.invalidate(); // the new review rows are on the server, not in the memo (F194)
           loadFilesToPlace(box); refreshCovStats();
-        }).catch(function (e) { goDone(); showError('<span>Couldn’t scan (' + escapeHtml(String((e && e.message) || e)) + ').</span>', 7000); });
+        }).catch(function (e) { goDone(); showError('<span>Couldn’t scan (' + pmErr(e) + ').</span>', 7000); });
       });
-    }).catch(function (e) { reset(); showError('<span>Couldn’t scan (' + escapeHtml(String((e && e.message) || e)) + ').</span>', 7000); });
+    }).catch(function (e) { reset(); showError('<span>Couldn’t scan (' + pmErr(e) + ').</span>', 7000); });
   }
   function loadFilesToPlace(box) {
     var host = box.querySelector("#ftpResults");
@@ -3491,20 +3609,23 @@
     Promise.all([window.PF_getToken(), storeP]).then(function (both) {
       var bearer = "Bearer " + both[0], store = both[1], auto = [], pending = [];
       var noAuto = {}; (store.noAuto || []).forEach(function (u) { noAuto[window.PF.canonFileUrl(u)] = 1; });
+      // What the nightly run already SUGGESTED is rendered from the store below — the live scan must not
+      // find the same (still unwired) file again and show it a second time under Ready to place (F004).
+      var reviewSet = {}; (store.review || []).forEach(function (x) { if (x && x.url) reviewSet[window.PF.canonFileUrl(x.url)] = 1; });
       (store.skip || []).forEach(function (u) { dismissed[window.PF.canonFileUrl(u)] = 1; });
       // Three folders at a time (the nightly cron runs five against the same Graph limits). Strictly
       // sequential was ~7.5 s for 13 folders at 400-950 ms each before "Files to place" could fill.
       return lhRunPool(watched, function (w) {
           return fetchFolderChildren(w.folderUrl, bearer).then(function (files) {
-            var plan = window.PF.planFolderPlacements(w.folderUrl, w.resource, files, models, wiredSet, folderWired);
+            var plan = window.PF.planFolderPlacements(w.folderUrl, w.resource, files, models, wiredSet, folderWired, { multiType: (w.resources || []).length > 1 });
             plan.autoPlace.forEach(function (x) {
               var c = window.PF.canonFileUrl(x.url);
-              if (dismissed[c]) return;
+              if (dismissed[c] || reviewSet[c]) return;
               // A PM already removed this exact guess once — offer it, but don't call it confident again.
               if (noAuto[c]) pending.push({ file: x.file, url: x.url, folderUrl: x.folderUrl, resource: x.resource, candidates: [], reason: "removed-before" });
               else auto.push(x);
             });
-            plan.pending.forEach(function (x) { if (!dismissed[window.PF.canonFileUrl(x.url)]) pending.push(x); });
+            plan.pending.forEach(function (x) { var c2 = window.PF.canonFileUrl(x.url); if (!dismissed[c2] && !reviewSet[c2]) pending.push(x); });
           }, function () {}); // a folder that won't list is skipped, not fatal
       }, 3).then(function () {
         // Fold in anything the server knows about that this browser's scan didn't reach (a folder it
@@ -3518,7 +3639,7 @@
         if (!live()) return; // a newer scan started while this one ran — its results win
         renderFilesToPlace(box, host, auto, pending, store.review || []);
       });
-    }).catch(function (e) { if (!live()) return; box._loaded = false; host.innerHTML = '<div class="wire-msg err">Couldn’t scan (' + escapeHtml(String((e && e.message) || e)) + ').</div>'; if (box._onError) box._onError(); });
+    }).catch(function (e) { if (!live()) return; box._loaded = false; host.innerHTML = '<div class="wire-msg err">Couldn’t scan (' + pmErr(e) + ').</div>'; if (box._onError) box._onError(); });
   }
   function renderFilesToPlace(box, host, auto, pending, review) {
     review = review || []; auto = auto || []; pending = pending || [];
@@ -3549,7 +3670,7 @@
             // Per-row accessible names: a list of 20 identical "Keep button" / "Remove button" tells a
             // screen-reader user nothing about WHICH file or model they are acting on.
             '<button class="wire-btn primary ftp-keep" type="button" aria-label="' + escapeAttr("Add " + x.file + " to " + x.model + " · " + x.resource) + '">Add</button>' +
-            '<button class="ftp-reject ftp-undo" type="button" aria-label="' + escapeAttr("Don’t add " + x.file + " to " + x.model) + '">Remove</button></li>';
+            '<button class="ftp-reject ftp-undo" type="button" aria-label="' + escapeAttr("Not this model: " + x.file + " → " + x.model) + '">Not this model</button></li>';
         }).join("") + '</ul>';
     }
     if (auto.length) {
@@ -3557,7 +3678,7 @@
         '<ul class="wl-list ftp-auto">' + auto.map(function (x, i) {
           return '<li class="wl-row" data-i="' + i + '"><span class="lh-badge wanted">Match</span><span class="wl-where"><button class="ftp-fname" type="button" title="Preview">' + escapeHtml(x.file) + '</button> <span class="ftp-trail">→ ' + escapeHtml(x.model) + ' · ' + escapeHtml(x.resource) + '</span></span>' +
             '<button class="wire-btn primary ftp-place" type="button" aria-label="' + escapeAttr("Add " + x.file + " to " + x.model + " · " + x.resource) + '">Add</button>' +
-            '<button class="ftp-reject ftp-skip" type="button" title="Not a fit" aria-label="' + escapeAttr("Not a fit: " + x.file) + '">Remove</button></li>';
+            '<button class="ftp-reject ftp-skip" type="button" title="Never suggest this file again" aria-label="' + escapeAttr("Never suggest " + x.file) + '">Never suggest</button></li>';
         }).join("") + '</ul>' +
         '<div class="ftp-allbar"><button class="wire-btn primary ftp-all" type="button">Add all ' + auto.length + '</button></div>';
     }
@@ -3570,7 +3691,7 @@
           return '<li class="wl-row" data-i="' + i + '"><span class="lh-badge warn">Pick model</span><span class="wl-where"><button class="ftp-fname" type="button" title="Preview">' + escapeHtml(x.file) + '</button> <span class="ftp-trail">· ' + escapeHtml(x.resource) + '</span></span>' + ageChip(x.at, "waiting", true) +
             '<button class="wire-sel ftp-mbtn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Choose models for ' + escapeAttr(x.file) + '">Choose models…</button>' +
             '<button class="wire-btn primary ftp-place" type="button" disabled aria-label="' + escapeAttr("Add " + x.file + " to the models you pick") + '">Add</button>' +
-            '<button class="ftp-reject ftp-skip" type="button" title="Not a fit" aria-label="' + escapeAttr("Not a fit: " + x.file) + '">Remove</button></li>';
+            '<button class="ftp-reject ftp-skip" type="button" title="Never suggest this file again" aria-label="' + escapeAttr("Never suggest " + x.file) + '">Never suggest</button></li>';
         }).join("") + '</ul>';
     }
     host.innerHTML = html;
@@ -3626,15 +3747,15 @@
       li.querySelector(".ftp-skip").addEventListener("click", function () {
         var b = this; b.disabled = true;
         // Only drop the row once the server has the tombstone — otherwise tonight's run re-offers it.
-        ftpMark("dismiss", x).then(function () { ftpDismiss(x.url); finishRow(li, x); })
-          .catch(function (e) { b.disabled = false; showError('<span>Couldn’t save that — “' + escapeHtml(x.file) + '” is still listed. ' + escapeHtml(String((e && e.message) || e)) + '</span>', 7000); });
+        ftpMark("dismiss", x).then(function () { ftpDismiss(x.url); finishRow(li, x); showToast('<span>Hidden for everyone.</span>', 8000, { label: "Undo", onClick: function () { ftpUndo(x, box); } }); })
+          .catch(function (e) { b.disabled = false; showError('<span>Couldn’t save that — “' + escapeHtml(x.file) + '” is still listed. ' + pmErr(e) + '</span>', 7000); });
       });
       li.querySelector(".ftp-place").addEventListener("click", onPlace || function () {
         var b = this, mdl = getModel(); b.disabled = true; b.textContent = "…";
         // The placement itself is what matters here; recording it as reviewed is bookkeeping, so a
         // failure there is logged rather than surfaced — but it must not go unhandled.
         ftpPlace(x, mdl).then(function () { ftpMark("keep", x, mdl).catch(function (e) { console.warn("[pf] placement recorded but not marked reviewed", e); }); toastSaved('Added to ' + escapeHtml(mdl) + '.'); finishRow(li, x); refreshCovStats(); if (_todoIssuesRepaint) _todoIssuesRepaint(); })
-          .catch(function (e) { b.disabled = false; b.textContent = "Add"; showError('<span>Couldn’t place (' + escapeHtml(String((e && e.message) || e)) + ').</span>', 6000); });
+          .catch(function (e) { b.disabled = false; b.textContent = "Add"; showError('<span>Couldn’t place (' + pmErr(e) + ').</span>', 6000); });
       });
     }
     [].forEach.call(host.querySelectorAll(".ftp-review .wl-row"), function (li) {
@@ -3648,15 +3769,15 @@
         ftpPlace(x, x.model).then(function () {
           ftpMark("keep", x, x.model).catch(function (e) { console.warn("[pf] placement recorded but not marked reviewed", e); });
           toastSaved('Added to ' + escapeHtml(x.model) + '.'); finishRow(li, x); refreshCovStats(); if (_todoIssuesRepaint) _todoIssuesRepaint();
-        }).catch(function (e) { b.disabled = false; b.textContent = "Add"; showError('<span>Couldn’t add that (' + escapeHtml(String((e && e.message) || e)) + ').</span>', 7000); });
+        }).catch(function (e) { b.disabled = false; b.textContent = "Add"; showError('<span>Couldn’t add that (' + pmErr(e) + ').</span>', 7000); });
       });
       li.querySelector(".ftp-undo").addEventListener("click", function () {
         var b = this; b.disabled = true; b.textContent = "…";
         ftpUnplace(x).then(function (res) {
-          if (res && res.cancelled) { b.disabled = false; b.textContent = "Remove"; return; }
-          showToast(svg(ICONS.ext) + '<span>Removed — it’ll come back under “Needs your input”.</span>'); finishRow(li, x); refreshCovStats();
+          if (res && res.cancelled) { b.disabled = false; b.textContent = "Not this model"; return; }
+          showToast(svg(ICONS.check) + '<span>Removed — it’ll come back under “Needs your input”.</span>'); finishRow(li, x); refreshCovStats();
         })
-          .catch(function (e) { b.disabled = false; b.textContent = "Remove"; showError('<span>Couldn’t remove (' + escapeHtml(String((e && e.message) || e)) + ').</span>', 6000); });
+          .catch(function (e) { b.disabled = false; b.textContent = "Not this model"; showError('<span>Couldn’t remove (' + pmErr(e) + ').</span>', 6000); });
       });
     });
     [].forEach.call(host.querySelectorAll(".ftp-auto .wl-row"), function (li) { var x = auto[+li.getAttribute("data-i")]; wireRow(li, x, function () { return x.model; }); });
@@ -3676,7 +3797,7 @@
           selected.forEach(function (m) { ftpMark("keep", x, m).catch(function (e) { console.warn("[pf] placement recorded but not marked reviewed", e); }); });
           toastSaved('Added to ' + (selected.length > 1 ? selected.length + ' models' : escapeHtml(selected[0])) + '.');
           finishRow(li, x); refreshCovStats();
-        }).catch(function (e) { b.disabled = false; b.textContent = "Add"; showError('<span>Couldn’t place (' + escapeHtml(String((e && e.message) || e)) + ').</span>', 6000); });
+        }).catch(function (e) { b.disabled = false; b.textContent = "Add"; showError('<span>Couldn’t place (' + pmErr(e) + ').</span>', 6000); });
       });
     });
     var allBtn = host.querySelector(".ftp-all");
@@ -3684,22 +3805,26 @@
       var b = this; b.disabled = true; b.textContent = "Placing…";
       // Only the rows still standing — never a file the PM already dismissed or placed by hand.
       var todo = auto.filter(function (x) { return !x._done; });
-      if (!todo.length) { b.disabled = false; b.textContent = "Place all"; loadFilesToPlace(box); return; }
+      if (!todo.length) { b.disabled = false; b.textContent = "Add all"; loadFilesToPlace(box); return; }
       ftpPlaceAll(todo).then(function (res) {
         todo.forEach(function (x) { x._done = 1; });
+        // Mark the placed suggestions reviewed, like the per-row Add does — otherwise the nightly "Suggested"
+        // rows stayed on the list after Add all (F004). Only when every write landed: a partial failure
+        // cannot say which rows were saved, so those stay until a human looks.
+        if (!res.failed.length) todo.forEach(function (x) { ftpMark("keep", x, x.model).catch(function (e) { console.warn("[pf] placement recorded but not marked reviewed", e); }); });
         if (res.failed.length) {
           showError('<span>Added ' + res.placed + ', but ' + res.failed.length + ' couldn’t be saved: ' + escapeHtml(res.failed.join("; ")) + '</span>', 10000);
         } else {
           // "Placed 0 files" reads as a failure when it actually means the planner de-duplicated —
           // every file was already linked, so there was nothing to write.
           if (res.placed) toastSaved('Added ' + res.placed + ' file' + (res.placed === 1 ? '' : 's') + '.');
-          else showToast(svg(ICONS.ext) + '<span>Already linked — nothing to add.</span>');
+          else showToast(svg(ICONS.check) + '<span>Already linked — nothing to add.</span>');
         }
         refreshCovStats(); loadFilesToPlace(box);
       }).catch(function (err) {
         // Without this a hard rejection wedges the button on "Placing…" with an unhandled rejection.
-        b.disabled = false; b.textContent = "Place all " + todo.length;
-        showError('<span>Couldn’t place these (' + escapeHtml(String((err && err.message) || err)) + ').</span>', 8000);
+        b.disabled = false; b.textContent = "Add all " + todo.length;
+        showError('<span>Couldn’t place these (' + pmErr(err) + ').</span>', 8000);
       });
     });
     // Red count badge = everything awaiting a human decision.
@@ -3739,7 +3864,7 @@
     var query = String(q).trim().toLowerCase();
     if (!query) return false;
     if (window.PF && PF.expandSearchQuery) query = PF.expandSearchQuery(query, RUNTIME_ALIASES); // keep in lock-step with renderSearch
-    var tokens = PF.tokenizeQuery(query);
+    var tokens = PF.searchTokens(query);
     // Same predicate as renderSearch — if these two ever disagree, a query the search DOES answer keeps
     // being logged as a miss and shows up on the PM worklist as demand that doesn't exist.
     if (INDEX.some(function (n) { return PF.searchMatch(tokens, n.name, (n.trail || "") + " " + (n.extra || ""), n.model || n.name); })) return false;
@@ -3798,11 +3923,15 @@
     setTimeout(function () { awaiting = {}; reconcile(); }, 12000); // a stuck loader must not strand the badge
     function counting() { for (var k in awaiting) if (awaiting.hasOwnProperty(k)) return true; return false; }
     function reconcile() {
-      var total = counts.issues + counts.empty + counts.review + counts.place + counts.sort + counts.search + counts.reports + counts.fill;
+      // The red number means "act now": broken links, empty folders, files to place, the pile, misses, reports.
+      // Needs review and Fill these next are amber nudges — they keep their own badge but stay out of the total,
+      // or the inbox never reaches zero (F199, owner decision 2026-10-07). They still keep the box visible.
+      var total = counts.issues + counts.empty + counts.place + counts.sort + counts.search + counts.reports;
+      var soft = counts.review + counts.fill;
       // Keep the box open when a tile FAILED to load, even at total 0 — otherwise a failed /api/unsorted,
       // /api/placements, or /api/usage-insights leaves the inbox looking empty while work is actually unknown.
       var anyErr = !!(errored.issues || errored.place || errored.sort || errored.search || errored.reports);
-      box.hidden = total === 0 && !anyErr;
+      box.hidden = total === 0 && soft === 0 && !anyErr;
       var tb = box.querySelector(".todo-total");
       if (tb) {
         var busy = counting();
@@ -3822,6 +3951,7 @@
     var empties = todoBox("Empty folders", "todo-empty", svg(ICONS.folder), "linked, but nothing in them yet", false);
     empties._onCount = function (n) { counts.empty = n; settled("empty"); empties.hidden = n === 0; reconcile(); };
     var review = todoBox("Needs review", "todo-review", svg(ICONS.edit), null, false); // collapsed by default — non-urgent
+    review.querySelector(".ftp-badge").classList.add("amber");
     review._onCount = function (n) { counts.review = n; settled("review"); review.hidden = n === 0; reconcile(); };
     // Render one fix-work tile. `withRecheck` adds the "Re-check links" action — only on the health-based
     // Link Issues tile; the Needs-review tile is date-based, so a re-check can't clear its rows.
@@ -3884,6 +4014,7 @@
     // a never-linked resource on a busy model appeared nowhere in the inbox. Capped at 3 and collapsed:
     // this is a nudge, not the whole backlog (the full ranking lives on Metrics).
     var fill = todoBox("Fill these next", "todo-fill", svg(ICONS.edit), "unlinked, on models people open", false);
+    fill.querySelector(".ftp-badge").classList.add("amber");
     boxesEl.appendChild(fill);
     if (window.PF_getApiToken) awaiting.fill = 1, loadTodoFillNext(fill, function (n) { counts.fill = n; settled("fill"); setFtpBadge(fill, n); fill.hidden = n === 0; reconcile(); });
     reconcile();
@@ -3989,14 +4120,24 @@
     }).then(function (results) {
       items.forEach(function (it, i) { it.result = results[i]; });
       btnDone(); if (statusEl) statusEl.textContent = "";
-      var map = {}, okN = 0, probs = [];
+      var map = {}, okN = 0, probs = [], unk = 0;
       items.forEach(function (it) {
-        var s = it.result && it.result.status;
-        if (s === "broken" || s === "empty") { map[it.model + "::" + it.resource] = s; probs.push({ model: it.model, resource: it.resource, fam: it.fam, prod: it.prod, path: it.path, status: s, detail: it.result.detail, url: it.result.url }); }
-        else if (s !== "unknown") okN++;
+        var s = it.result && it.result.status, key = it.model + "::" + it.resource;
+        if (s === "broken" || s === "empty") { map[key] = s; probs.push({ model: it.model, resource: it.resource, fam: it.fam, prod: it.prod, path: it.path, status: s, detail: it.result.detail, url: it.result.url }); }
+        // "unknown" is the classifier's honest answer for offline / throttled / a 401 — not a clean bill of
+        // health. Dropping it used to save a run that hid every real red flag the server knew about
+        // (F050/F053). Carry the previous verdict forward instead.
+        else if (s === "unknown") { unk++; var prev = healthStatusFor(it.model, it.resource); if (prev) { map[key] = prev; probs.push({ model: it.model, resource: it.resource, fam: it.fam, prod: it.prod, path: it.path, status: prev, detail: "not checked this run — previous result kept", url: null }); } }
+        else okN++;
       });
+      if (unk && unk / items.length > 0.3) {
+        showError('<span>Couldn’t check ' + unk + ' of ' + items.length + ' links right now (network or rate limit) — previous results kept.</span>', 8000);
+        if (srAnnounce) srAnnounce.textContent = "Couldn’t check " + unk + " of " + items.length + " links — previous results kept.";
+        if (onDone) onDone();
+        return;
+      }
       saveHealth(map, Date.now(), okN, probs);
-      if (srAnnounce) srAnnounce.textContent = "Checked " + items.length + " link" + (items.length === 1 ? "" : "s") + " — " + (probs.length ? probs.length + " issue" + (probs.length === 1 ? "" : "s") : "no issues") + ".";
+      if (srAnnounce) srAnnounce.textContent = "Checked " + items.length + " link" + (items.length === 1 ? "" : "s") + " — " + (probs.length ? probs.length + " issue" + (probs.length === 1 ? "" : "s") : "no issues") + (unk ? ", " + unk + " couldn’t be checked" : "") + ".";
       if (onDone) onDone();
     }).catch(function (err) {
       btnDone(); if (statusEl) statusEl.textContent = "";
@@ -4086,13 +4227,243 @@
   // work and never refetches. Modes: "doc" (one file → many products), "folder" (a folder → a model).
   // (Sorting the pile moved to the To-Do inbox.) The switcher is a proper ARIA tablist: roving tabindex,
   // arrow-key nav, and each tab wired to its role="tabpanel" via aria-controls / aria-labelledby.
-  var _addFilesMode = "folder", _afSeq = 0;
+  // ---- Add files › Link a product folder (the ONE folder-linking method since 2026-10-07, owner decision) ----
+  // The collateral now lives in one folder per product on the Product Management site, every resource type
+  // together, named `<Type>_<Product>_<variant>`. Paste that folder: PF.planProductFolder sorts every file by type
+  // and model from its name, the PM checks the plan (products, type, models per file) and Approves. Approve writes
+  // the files through the normal /api/wire-links path — and, per cell it touches, drops the links that still
+  // point at the sites the collateral left (PF.isLegacyUrl), so one folder = one product fully migrated.
+  // The old per-type folder tool (wirePanel) and the "one folder for every family" matcher are no longer offered
+  // on the page; their code stays until the migration is through.
+  function productFolderPanel(bare) {
+    var box = document.createElement("div"); box.className = "wire pfold";
+    box.innerHTML =
+      (bare ? '' : '<div class="wire-head" role="heading" aria-level="2">' + svg(ICONS.folder) + '<span>Link a product folder</span></div>') +
+      '<p class="wire-lead">Paste the link of a <b>product folder</b> on the Product Management site. Every file in it is sorted by type and model from its name — check the plan, fix anything, then Approve. Approving also removes that product’s links that still point at the old Marketing site.</p>' +
+      '<p class="wire-steps">Paste the folder link&nbsp;→&nbsp;Preview&nbsp;→&nbsp;check products, types and models&nbsp;→&nbsp;Approve.</p>' +
+      '<div class="wire-form">' +
+        '<input class="wire-input" id="pfoldUrl" type="url" aria-label="SharePoint folder link" placeholder="Paste the product folder link">' +
+        '<button class="wire-btn" id="pfoldPreview" type="button">Preview</button>' +
+      '</div>' +
+      '<details class="wire-help">' +
+        '<summary>How do I get the folder link?</summary>' +
+        '<div class="wire-help-body">' +
+          '<ol class="wire-help-steps">' +
+            '<li>In SharePoint, open the <b>product folder</b> (e.g. <b>01 Hoardmaster</b>) — not a single file.</li>' +
+            '<li>Click <b>Copy link</b> at the top of the folder <em>(not <b>Share</b>)</em>.</li>' +
+            '<li><b>Check who can open it.</b> If the link says <em>“Specific people”</em>, click that and choose <b>“People in Grumbleton USA”</b> — otherwise the site (and your colleagues) can’t open the files.</li>' +
+            '<li>Paste it into the box above and hit <b>Preview</b>.</li>' +
+          '</ol>' +
+        '</div>' +
+      '</details>' +
+      '<div class="wire-result" id="pfoldResult"></div>';
+    box.querySelector("#pfoldPreview").addEventListener("click", function () { pfoldPreview(box); });
+    box.querySelector("#pfoldUrl").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); pfoldPreview(box); } });
+    return box;
+  }
+  // Every product in the catalog with its place in the tree — the planner's candidates and the writer's routing.
+  function pfoldProducts() {
+    var out = [];
+    CATALOG.forEach(function (c) { c.families.forEach(function (f) { f.products.forEach(function (p) { if (p.models && p.models.length) out.push({ name: p.name, family: f.name, cat: c.name, models: p.models.slice() }); }); }); });
+    return out;
+  }
+  function pfoldFolderLabel(url) {
+    try { var p = String(url).split("?")[0].split("#")[0].replace(/\/+$/, ""); return decodeURIComponent(p.slice(p.lastIndexOf("/") + 1)); } catch (e) { return ""; }
+  }
+  function pfoldPreview(box) {
+    var pvBtn = box.querySelector("#pfoldPreview");
+    if (pvBtn.disabled) return; // a run is in flight (F036)
+    var url = box.querySelector("#pfoldUrl").value.trim(), result = box.querySelector("#pfoldResult");
+    if (!/^https?:\/\//i.test(url)) { result.innerHTML = '<div class="wire-msg">Paste a full https:// SharePoint folder link first.</div>'; return; }
+    if (/\.[a-z0-9]{2,5}$/i.test(url.split("?")[0]) && !window.PF.looksLikeFolder(url)) { result.innerHTML = '<div class="wire-msg">That looks like a single file. Paste the link of the <b>folder</b> it sits in.</div>'; return; }
+    if (!window.PF_getToken) { result.innerHTML = '<div class="wire-msg err">Please sign in again.</div>'; return; }
+    result.innerHTML = '<div class="wire-msg">Opening the folder…</div>';
+    var pvDone = busyButton(pvBtn, "Opening…");
+    window.PF_getToken().then(function (token) { return fetchFolderChildren(url, "Bearer " + token); }).then(function (files) {
+      if (!files.length) { result.innerHTML = '<div class="wire-msg">That folder has no files.</div>'; return; }
+      var products = pfoldProducts();
+      var label = pfoldFolderLabel(url);
+      var picked = window.PF.productsForFolder(label, products).map(function (p) { return p.name; });
+      var st = { url: url, label: label, files: files, products: products, picked: picked, rows: null };
+      box._pfold = st;
+      pfoldRender(box);
+    }).catch(function (err) { result.innerHTML = '<div class="wire-msg err">Couldn’t open that as a folder (' + pmErr(err) + '). Make sure it’s a <b>folder</b> link — use <b>Copy link</b> on the folder itself.</div>'; })
+      .then(function () { pvDone(); });
+  }
+  var PFOLD_SCOPE = { pinned: ["Match", "wanted"], product: ["All models", "ok"], base: ["Base model", "ok"], candidates: ["Pick", "warn"], type: ["Needs a type", "warn"], product0: ["Needs a product", "warn"], linked: ["Linked", "ok"] };
+  // Is this file already on every model the plan gives it, under that type? Then there is nothing to approve
+  // for it — it shows as Linked and stays unticked (a plan that matches the sheet is a done state, not a button).
+  function pfoldAlreadyLinked(r) {
+    if (!r.type || !r.models.length) return false;
+    var c = window.PF.canonFileUrl(r.url);
+    return r.models.every(function (m) { return linksFor(m, r.type).some(function (l) { return window.PF.canonFileUrl(l.url) === c; }); });
+  }
+  // (Re)build the editable plan: products the folder covers → the planner → one row per file with its own
+  // type select, model picker and include box. Re-planning on a product change keeps the PM's row edits only
+  // where they still apply (the row set is rebuilt from the planner).
+  function pfoldRender(box) {
+    var st = box._pfold, result = box.querySelector("#pfoldResult");
+    var pickedProducts = st.products.filter(function (p) { return st.picked.indexOf(p.name) !== -1; });
+    var plan = window.PF.planProductFolder(st.files, pickedProducts);
+    var allModels = []; pickedProducts.forEach(function (p) { p.models.forEach(function (m) { if (allModels.indexOf(m) === -1) allModels.push(m); }); });
+    // rows: planned items first (in type order), then the ones needing a type, then the ones needing a product
+    var rows = [];
+    RESOURCE_TYPES.forEach(function (r) { plan.items.filter(function (it) { return it.type === r.name; }).forEach(function (it) {
+      var row = { name: it.name, url: it.url, fileId: it.fileId, type: it.type, models: it.models.slice(), scope: it.scope, include: it.scope !== "candidates" };
+      if (row.include && pfoldAlreadyLinked(row)) { row.scope = "linked"; row.include = false; }
+      rows.push(row);
+    }); });
+    plan.needsType.forEach(function (x) { rows.push({ name: x.name, url: x.url, fileId: x.fileId, type: "", models: [], scope: "type", include: false }); });
+    plan.needsProduct.forEach(function (x) { rows.push({ name: x.name, url: x.url, fileId: x.fileId, type: x.type, models: [], scope: "product0", include: false }); });
+    st.rows = rows;
+    var typeOpts = function (sel) { return '<option value="">Type…</option>' + RESOURCE_TYPES.map(function (r) { return '<option value="' + escapeAttr(r.name) + '"' + (r.name === sel ? ' selected' : '') + '>' + escapeHtml(r.name) + '</option>'; }).join(""); };
+    var html = '<div class="pfold-folder"><b>' + escapeHtml(st.label || "Folder") + '</b> · ' + st.files.length + ' file' + (st.files.length === 1 ? '' : 's') + '</div>' +
+      '<div class="pfold-prods" role="group" aria-label="Products this folder covers"><span class="pfold-prods-h">Products this folder covers:</span>' +
+        st.products.map(function (p) { return '<label class="uns-check pfold-prod"><input type="checkbox" class="pfold-pck" value="' + escapeAttr(p.name) + '"' + (st.picked.indexOf(p.name) !== -1 ? ' checked' : '') + '> <span>' + escapeHtml(p.name) + '</span></label>'; }).join("") +
+      '</div>';
+    if (!pickedProducts.length) html += '<div class="wire-msg">Tick the product(s) this folder belongs to — the folder name didn’t match one.</div>';
+    var byType = {}; rows.forEach(function (r, i) { var k = r.scope === "type" ? "__type" : r.scope === "product0" ? "__prod" : r.type; (byType[k] = byType[k] || []).push(i); });
+    function rowHtml(i) {
+      var r = rows[i], sc = PFOLD_SCOPE[r.scope] || ["", "ok"];
+      return '<li class="wl-row pfold-row" data-i="' + i + '">' +
+        '<input type="checkbox" class="pfold-inc" aria-label="' + escapeAttr("Link " + r.name) + '"' + (r.include ? ' checked' : '') + (r.models.length ? '' : ' disabled') + '>' +
+        '<span class="lh-badge ' + sc[1] + '">' + sc[0] + '</span>' +
+        '<span class="wl-where"><button class="ftp-fname" type="button" title="Preview">' + escapeHtml(r.name) + '</button></span>' +
+        '<select class="wire-sel pfold-type" aria-label="' + escapeAttr("Resource type for " + r.name) + '">' + typeOpts(r.type) + '</select>' +
+        '<button class="wire-sel ftp-mbtn pfold-mbtn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="' + escapeAttr("Choose models for " + r.name) + '">' + escapeHtml(unsMbtnLabel(allModels, r.models)) + '</button>' +
+        '</li>';
+    }
+    RESOURCE_TYPES.forEach(function (r) { var ix = byType[r.name]; if (!ix) return; html += '<div class="ftp-h" role="heading" aria-level="3">' + escapeHtml(r.name) + ' <small>' + ix.length + ' file' + (ix.length === 1 ? '' : 's') + '</small></div><ul class="wl-list">' + ix.map(rowHtml).join("") + '</ul>'; });
+    if (byType.__type) html += '<div class="ftp-h" role="heading" aria-level="3">Needs a type <small>no type word in the name — pick one, or leave unlinked</small></div><ul class="wl-list">' + byType.__type.map(rowHtml).join("") + '</ul>';
+    if (byType.__prod) html += '<div class="ftp-h" role="heading" aria-level="3">Needs a product <small>names a product that isn’t one of the ticked ones</small></div><ul class="wl-list">' + byType.__prod.map(rowHtml).join("") + '</ul>';
+    html += '<div class="wire-summary pfold-sum" aria-live="polite"></div>' +
+      '<div class="wire-approve"><button class="wire-btn primary" id="pfoldApprove" type="button">Approve &amp; save</button></div>';
+    result.innerHTML = html;
+    function summarize() {
+      var inc = rows.filter(function (r) { return r.include && r.type && r.models.length; });
+      var linkedN = rows.filter(function (r) { return r.scope === "linked"; }).length;
+      var models = {}; inc.forEach(function (r) { r.models.forEach(function (m) { models[m] = 1; }); });
+      // A dry run of exactly what Approve would write: how many links leave (old-site, or this folder's files
+      // sitting in a cell the plan does not give them) — so the number on the page is the number that happens.
+      var dry = pfoldDryRun(pickedProducts, rows, st.url, st.files.map(function (f) { return f.url; }));
+      var s = result.querySelector(".pfold-sum"), btn = result.querySelector("#pfoldApprove");
+      var nothing = !inc.length && !dry.removed;
+      s.innerHTML = nothing
+        ? (linkedN ? '<b>All ' + linkedN + ' planned file' + (linkedN === 1 ? ' is' : 's are') + ' already linked exactly like this.</b> Nothing to approve.' : 'Nothing is ticked — nothing to approve.')
+        : '<b>' + inc.length + '</b> of ' + rows.length + ' files to link' + (linkedN ? ' (' + linkedN + ' already linked)' : '') + ' → <b>' + Object.keys(models).length + '</b> model' + (Object.keys(models).length === 1 ? '' : 's') + ' across <b>' + pickedProducts.length + '</b> product' + (pickedProducts.length === 1 ? '' : 's') +
+          (dry.removed ? ' · <b>' + dry.removed + '</b> link' + (dry.removed === 1 ? '' : 's') + ' in ' + dry.cells + ' cell' + (dry.cells === 1 ? '' : 's') + ' will be removed (old-site, or misfiled files of this folder)' : ' · nothing to remove');
+      btn.disabled = nothing;
+      btn.textContent = nothing ? "Nothing to approve" : (dry.removed ? "Approve & save (removes " + dry.removed + ")" : "Approve & save");
+    }
+    [].forEach.call(result.querySelectorAll(".pfold-pck"), function (cb) {
+      cb.addEventListener("change", function () { st.picked = [].map.call(result.querySelectorAll(".pfold-pck:checked"), function (c) { return c.value; }); pfoldRender(box); });
+    });
+    [].forEach.call(result.querySelectorAll(".pfold-row"), function (li) {
+      var r = rows[+li.getAttribute("data-i")], inc = li.querySelector(".pfold-inc"), mbtn = li.querySelector(".pfold-mbtn");
+      li.querySelector(".ftp-fname").addEventListener("click", function () { openResource([{ label: r.name, url: r.url }], r.name, ""); });
+      inc.addEventListener("change", function () { r.include = inc.checked; summarize(); });
+      li.querySelector(".pfold-type").addEventListener("change", function () { r.type = this.value; if (!r.type) { r.include = false; inc.checked = false; } inc.disabled = !(r.type && r.models.length); summarize(); });
+      mbtn.addEventListener("click", function () {
+        unsOpenCheckMenu(mbtn, allModels, r.models, function () {
+          mbtn.textContent = unsMbtnLabel(allModels, r.models);
+          inc.disabled = !(r.type && r.models.length);
+          if (!r.models.length) { r.include = false; inc.checked = false; }
+          else if (r.scope === "type" || r.scope === "product0" || r.scope === "candidates") { r.include = !!r.type; inc.checked = r.include; } // a human picked → it's meant to be linked
+          summarize();
+        });
+      });
+    });
+    result.querySelector("#pfoldApprove").addEventListener("click", function () { pfoldApprove(box, this); });
+    summarize();
+  }
+  // What Approve would change, cell by cell, without writing: { removed, cells, writes }. The same rule the
+  // writer uses (PF.planCellRelink with the folder), so the preview's numbers are the write's numbers.
+  // Rows the plan WANTS in the sheet: ticked ones, plus the ones already linked exactly like this (they show as
+  // Linked and unticked — unticked here means "nothing to add", never "remove"; the folder's own files not in
+  // this set are what gets removed).
+  function pfoldWanted(rows) { return rows.filter(function (r) { return (r.include || r.scope === "linked") && r.type && r.models.length; }); }
+  function pfoldDesired(rows) {
+    var desired = {};
+    pfoldWanted(rows).forEach(function (r) { r.models.forEach(function (m) { desired[m] = desired[m] || {}; (desired[m][r.type] = desired[m][r.type] || []).push(r.url); }); });
+    return desired;
+  }
+  function pfoldDryRun(pickedProducts, rows, folderUrl, folderFiles) {
+    var desired = pfoldDesired(rows);
+    var removed = 0, cells = 0, writes = 0;
+    pickedProducts.forEach(function (p) { RESOURCE_TYPES.forEach(function (r) { p.models.forEach(function (m) {
+      var current = linksFor(m, r.name).map(function (l) { return l.url; });
+      var plan = window.PF.planCellRelink(current, (desired[m] && desired[m][r.name]) || [], { folderUrl: folderUrl, folderFiles: folderFiles || [] });
+      if (!plan.changed) return;
+      writes++; if (plan.removed) { removed += plan.removed; cells++; }
+    }); }); });
+    return { removed: removed, cells: cells, writes: writes };
+  }
+  // Approve: one confirm with the real counts, then — planned from the sheet as it is NOW (fresh catalog), one
+  // write per (product, resource) — each touched cell becomes: its non-legacy links + the planned files, de-duped
+  // by file identity (PF.planCellRelink). Removals are declared to the shrink guard and each write carries the
+  // compare-and-swap pre-image. A failed group is reported with its name; the others still land.
+  function pfoldApprove(box, btn) {
+    var st = box._pfold; if (!st) return;
+    var pickedProducts = st.products.filter(function (p) { return st.picked.indexOf(p.name) !== -1; });
+    var inc = st.rows.filter(function (r) { return r.include && r.type && r.models.length; });
+    var dry = pfoldDryRun(pickedProducts, st.rows, st.url, st.files.map(function (f) { return f.url; }));
+    if (!inc.length && !dry.removed) { showToast('<span>Nothing to save — everything is already linked like this.</span>'); return; }
+    var modelSet = {}; inc.forEach(function (r) { r.models.forEach(function (m) { modelSet[m] = 1; }); });
+    var nM = Object.keys(modelSet).length;
+    pfConfirm({
+      title: "Link this folder" + (dry.removed ? " and remove " + dry.removed + " link" + (dry.removed === 1 ? "" : "s") + "?" : "?"),
+      body: [(inc.length ? "Add " + inc.length + " file" + (inc.length === 1 ? "" : "s") + " onto " + nM + " model" + (nM === 1 ? "" : "s") + " across " + pickedProducts.map(function (p) { return p.name; }).join(", ") + "." : "No files to add."),
+             (dry.removed ? "Remove " + dry.removed + " link" + (dry.removed === 1 ? "" : "s") + " in " + dry.cells + " cell" + (dry.cells === 1 ? "" : "s") + ": links that still point at the old Marketing / test-site folders, and files of this folder sitting under a type the plan does not give them. The files stay in SharePoint — only the Hub’s links change." : "Nothing is removed.")],
+      confirmLabel: dry.removed ? "Approve & remove " + dry.removed : "Approve"
+    }).then(function (ok) {
+      if (!ok) return;
+      if (!window.PF_getApiToken) { showError('<span>Please sign in again.</span>'); return; }
+      var done = busyButton(btn, "Saving…");
+      // desired[model][resource] = every url the plan wants there (ticked + already linked)
+      var desired = pfoldDesired(st.rows);
+      var wrote = 0, removed = 0, failed = [], missed = [];
+      return loadCatalog({ fresh: true }).then(function () {
+        var groups = [];
+        pickedProducts.forEach(function (p) { RESOURCE_TYPES.forEach(function (r) {
+          var assignments = {}, base = {}, byModel = {}, expectRemoved = 0, finals = {};
+          p.models.forEach(function (m) {
+            var current = linksFor(m, r.name).map(function (l) { return l.url; });
+            var plan = window.PF.planCellRelink(current, (desired[m] && desired[m][r.name]) || [], { folderUrl: st.url, folderFiles: st.files.map(function (f) { return f.url; }) });
+            if (!plan.changed) return;
+            assignments[m] = plan.final.join(" "); base[m] = current; finals[m] = plan.final;
+            if (plan.removed) { expectRemoved += plan.removed; byModel[m] = plan.removed; }
+          });
+          if (Object.keys(assignments).length) groups.push({ p: p, r: r.name, assignments: assignments, base: base, byModel: byModel, expectRemoved: expectRemoved, finals: finals });
+        }); });
+        if (!groups.length) { showToast('<span>Everything is already linked exactly like this — nothing to change.</span>'); return; }
+        return groups.reduce(function (chain, g) {
+          return chain.then(function () {
+            return postWire(g.p.family, g.p.name, g.r, g.assignments, { expectRemoved: g.expectRemoved, expectRemovedByModel: Object.keys(g.byModel).length ? g.byModel : undefined, base: g.base, allowMissed: true }).then(function (res) {
+              Object.keys(g.finals).forEach(function (m) { if (!(res && res.missed && res.missed.indexOf(m) !== -1)) { setLinks(m + "::" + g.r, g.finals[m]); clearHealthFor(m + "::" + g.r); } });
+              wrote += (res && res.updated) || Object.keys(g.assignments).length; removed += g.expectRemoved;
+              if (res && res.missed && res.missed.length) res.missed.forEach(function (m) { missed.push(m + " · " + g.r); });
+            }, function (e) { failed.push(g.p.name + " · " + g.r + " (" + pmErr(e) + ")"); });
+          });
+        }, Promise.resolve()).then(function () {
+          refreshCovStats(); if (_todoIssuesRepaint) _todoIssuesRepaint();
+          if (failed.length) showError('<span>Saved ' + wrote + ' row' + (wrote === 1 ? '' : 's') + ', but ' + failed.length + ' group' + (failed.length === 1 ? '' : 's') + ' failed: ' + escapeHtml(failed.join("; ")) + '. Preview again to retry those.</span>', 12000);
+          else toastSaved('Linked ' + inc.length + ' file' + (inc.length === 1 ? '' : 's') + (removed ? ' and removed ' + removed + ' old link' + (removed === 1 ? '' : 's') : '') + ' for ' + escapeHtml(pickedProducts.map(function (p) { return p.name; }).join(", ")) + '.');
+          if (missed.length) showToast('<span>No sheet row for ' + escapeHtml(missed.slice(0, 6).join(", ")) + (missed.length > 6 ? ' (+' + (missed.length - 6) + ')' : '') + ' — add the row in the Product Family Tree, then Preview again.</span>', 10000);
+          pfoldRender(box); // re-plan against the new state (the legacy count should now read zero)
+        });
+      }).catch(function (e) { showError('<span>Couldn’t save (' + pmErr(e) + ').</span>', 8000); })
+        .then(function () { done(); });
+    });
+  }
+  var _addFilesMode = "pfolder", _afSeq = 0;
   function addFilesPanel() {
     var box = document.createElement("div"); box.className = "wire addfiles"; box.setAttribute("data-anim", "addfiles");
     var uid = "af" + (++_afSeq); // unique tab/panel ids so multiple instances don't collide
     var modes = [
       { key: "doc", label: "One file → many products", build: function () { return docPlacePanel(true); } },
-      { key: "folder", label: "A folder → a model", build: function () { return wirePanel(true); } }
+      // The one folder method (owner decision 2026-10-07): the per-type folder tool (wirePanel) and the "one folder
+      // for every family" matcher are no longer offered — the product folders hold every type together.
+      { key: "pfolder", label: "Link a product folder", build: function () { return productFolderPanel(true); } }
     ];
     box.innerHTML =
       '<div class="wire-head" role="heading" aria-level="2">' + svg(ICONS.sync) + '<span>Add files</span></div>' +
@@ -4133,7 +4504,7 @@
       var ni = e.key === "ArrowLeft" ? (i - 1 + tabs.length) % tabs.length : e.key === "ArrowRight" ? (i + 1) % tabs.length : e.key === "Home" ? 0 : tabs.length - 1;
       e.preventDefault(); show(tabs[ni].getAttribute("data-mode"), true);
     });
-    show(modes.some(function (m) { return m.key === _addFilesMode; }) ? _addFilesMode : "folder");
+    show(modes.some(function (m) { return m.key === _addFilesMode; }) ? _addFilesMode : "pfolder");
     // (No _showMode hook: nothing ever called it. Re-add it the day something needs to jump to a mode.)
     return box;
   }
@@ -4148,8 +4519,11 @@
     if (catalogError) { content.innerHTML = catalogUnavailable("Product team", "Progress"); syncViewTabs(); return; }
     var s = coverageStats(), N = RESOURCE_TYPES.length;
     var pct = s.totalSlots ? Math.floor(s.linkedSlots / s.totalSlots * 100) : 0; // floor so 199/200 reads 99%, not a misleading 100%
-    content.innerHTML = head("Product team", "Progress", "Your coverage at a glance — what’s linked and which models still need work. You can also link folders and sort stray files. Nothing changes on the live site until you approve a preview; run a full link check from the toolbar above the grid.");
+    content.innerHTML = head("Product team", "Progress", "Your coverage at a glance — what’s linked and which models still need work. You can also link folders and sort stray files. Folder links are previewed before they save; Edit and To Do changes go live as soon as you save or add them. Run a full link check from the toolbar above the grid.");
     var wrap = document.createElement("div"); wrap.className = "cov-view view";
+    // Error-level admin alerts first (an expired Graph secret stops the nightly scan that feeds the inbox
+    // below) — warnings stay on Admin (F127).
+    (PF_ADMIN_ALERTS || []).filter(function (a) { return a.level === "error"; }).forEach(function (a) { wrap.appendChild(adminAlertEl(a)); });
 
     // "To do" leads the page — the single PM inbox (link issues, work-in-progress, the nightly file
     // suggestions nested inside, staff searches with no match, + a live "Check all links"). Everything that
@@ -4219,7 +4593,11 @@
         showError('<span>Open the “New on SharePoint” box on this tab first, then scan.</span>', 6000);
         return;
       }
+      // The tile and its To-do wrapper hide themselves while empty — a successful scan painted into a
+      // hidden box and looked like nothing happened (F052). Reveal both before the results arrive.
+      box.hidden = false; var w = box.closest(".todo-wrap"); if (w) { w.hidden = false; w.open = true; }
       if (!box.open) box.open = true; // make the results visible before they arrive
+      try { box.scrollIntoView({ behavior: RM.matches ? "auto" : "smooth", block: "center" }); } catch (e) {}
       ftpRescan(box, this); // dry-run first, exactly like the box's own button
     });
     toolbar.appendChild(scanTool);
@@ -4277,7 +4655,7 @@
         '</ul>' +
 
         '<h2 class="pmg-h">Add links to a product</h2>' +
-        '<p class="pmg-p">On the <b>Progress</b> tab, open <b>Add files</b> and pick <b>A folder&nbsp;→&nbsp;a model</b> to point a resource at a SharePoint folder (new files in that folder then show up automatically), or click <b>Edit</b> on any product section to add or remove individual links. Each resource stays <b>Work in progress</b> until it has a link that opens to real files.</p>' +
+        '<p class="pmg-p">On the <b>Progress</b> tab, open <b>Add files</b> and pick <b>Link a product folder</b> to sort a product folder’s files onto models by type and model from their names (new files in that folder are suggested in <b>To Do › New on SharePoint</b> for you to approve), or click <b>Edit</b> on any product section to add or remove individual links. Each resource stays <b>Work in progress</b> until it has a link that opens to real files. Files that match no model are parked in the <b>Unsorted pile</b> — sort them from <b>To Do › Sort the pile</b>.</p>' +
         '<p class="pmg-p">You’ll also see a <b>New on SharePoint</b> list in the To&nbsp;Do box at the top of the Progress tab. Every night the site scans your linked folders for new files it can match to a model and <b>suggests</b> them there. Review each one and <b>Add</b> it or <b>Remove</b> it — nothing goes on the live site until you add it.</p>' +
 
         '<h2 class="pmg-h">Manage a file across many products</h2>' +
@@ -4322,9 +4700,9 @@
     box.innerHTML =
       '<summary class="wire-head wire-warn-head">' + svg(ICONS.alert) + '<span>Sheet hygiene</span> <span class="uns-count">' + n + '</span></summary>' +
       '<div class="ui-body">' +
-      group("Unrecognized resource types", 'These rows have a <b>Resource</b> value that isn’t one of the recognized types, so they don’t appear anywhere on the site. Fix the spelling in the sheet.',
+      group("Unrecognized resource types", 'These rows have an <b>RSS</b> (resource type) value that isn’t one of the recognized types, so they don’t appear anywhere on the site. Fix the spelling in the sheet.',
         h.unknownResourceTypes, function (u) { return '<li class="ui-orphan"><span class="ui-q">' + escapeHtml(u.model || "(no model)") + '</span><span class="ui-sub">unrecognized resource type: “' + escapeHtml(u.rss || "") + '”</span></li>'; }) +
-      group("Text where a link should be", 'A link cell holding a note counts as nothing — it isn’t a link and it isn’t N/A, so the resource shows as missing. Paste the file link, or mark the resource N/A.',
+      group("Text where a link should be", 'An <b>SP Folder URL</b> cell holding a note counts as nothing — it isn’t a link and it isn’t N/A, so the resource shows as missing. Paste the file link, or mark the resource N/A.',
         h.invalidLinks, function (u) { return '<li class="ui-orphan"><span class="ui-q">' + escapeHtml(u.model || "") + ' · ' + escapeHtml(u.rss || "") + '</span><span class="ui-sub">“' + escapeHtml(u.text || "") + '”</span></li>'; }) +
       group("One model name under two products", 'Links are keyed by model name, so a name shared by two products merges their files into one set. Give one of them a distinct name.',
         h.dupeModelNames, function (u) { return '<li class="ui-orphan"><span class="ui-q">' + escapeHtml(u.model || "") + '</span><span class="ui-sub">' + escapeHtml((u.products || []).join(" · ")) + '</span></li>'; }) +
@@ -4522,6 +4900,28 @@
   // Metrics view (PM-only): how staff use the catalog — adoption, unmatched searches to act on, and linked-
   // but-unopened resources. Aggregate only (the server returns counts, never identities). Consolidates the
   // usage signals that were previously a collapsible buried in Progress.
+  // Weekly activity (F163, owner decision 2026-10-07): opens and distinct people are different magnitudes
+  // (hundreds vs a handful), so one shared scale flattened the people row into 2px stubs. Two rows, each
+  // scaled to ITS busiest week, the count printed above every bar (F167: the numbers used to live only in
+  // a hover tooltip), and a true 0 draws no bar at all — a 2px "min-height" stub read as a small week.
+  // Pure: trend in, markup out (unit-tested by lift).
+  function weeklyActivityHtml(trend) {
+    trend = trend || [];
+    if (!trend.some(function (w) { return w.opens || w.people; })) return '<div class="wire-msg">No activity recorded yet.</div>';
+    function shortWk(iso) { try { return new Date(iso + "T00:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" }); } catch (e) { return iso; } }
+    function row(kind, label) {
+      var max = Math.max(1, Math.max.apply(null, trend.map(function (w) { return w[kind] || 0; })));
+      return '<div class="met-row"><div class="met-rowlabel">' + label + '</div><div class="met-bars">' + trend.map(function (w) {
+        var v = w[kind] || 0;
+        return '<div class="met-bcol"><div class="met-val' + (v ? '' : ' zero') + '">' + v + '</div><div class="met-bwrap">' +
+          (v ? '<div class="met-bar ' + kind + '" data-barh="' + Math.max(2, Math.round(v / max * 64)) + '"></div>' : '') + '</div></div>';
+      }).join("") + '</div></div>';
+    }
+    return '<div class="met-rows">' + row("opens", "Opens") + row("people", "People") +
+      '<div class="met-row met-row-weeks"><div class="met-rowlabel"></div><div class="met-bars">' +
+      trend.map(function (w) { return '<div class="met-bcol"><div class="met-blabel">' + shortWk(w.week) + '</div></div>'; }).join("") +
+      '</div></div></div>';
+  }
   function renderMetrics() {
     content.innerHTML = head("Product team", "Metrics", "How staff use the catalog — so you can improve search, prune dead links, and track adoption. The charts show aggregate counts only; the usage log behind them records who opened what and drops the identity after ~60 days.");
     var wrap = document.createElement("div"); wrap.className = "view";
@@ -4564,20 +4964,11 @@
         fillResourceImpact(wrap, data);
         function tile(name, v) { var el = wrap.querySelector('[data-tile="' + name + '"]'); if (el) el.textContent = (v == null ? "—" : v); }
         tile("opens", data.opens); tile("people", data.activePeople); tile("signins", data.signins);
-        // Weekly adoption trend — two bars per week (opens, distinct people), scaled to the busiest week.
-        var trend = data.trend || [];
-        var maxV = Math.max(1, Math.max.apply(null, trend.map(function (w) { return Math.max(w.opens, w.people); })));
+        // Weekly activity: two rows (opens, people), each on its own scale, counts printed (F163/F167).
+        // shortWk stays here for the "last seen …" dates in the count lists below.
         function shortWk(iso) { try { return new Date(iso + "T00:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" }); } catch (e) { return iso; } }
         var mt = wrap.querySelector(".met-trend");
-        if (mt) mt.innerHTML = trend.some(function (w) { return w.opens || w.people; })
-          ? '<div class="met-bars">' + trend.map(function (w) {
-              return '<div class="met-bcol" title="' + shortWk(w.week) + ': ' + w.opens + ' opens · ' + w.people + ' people">' +
-                '<div class="met-bwrap"><div class="met-bar opens" data-barh="' + Math.round(w.opens / maxV * 110) + '"></div>' +
-                '<div class="met-bar people" data-barh="' + Math.round(w.people / maxV * 110) + '"></div></div>' +
-                '<div class="met-blabel">' + shortWk(w.week) + '</div></div>';
-            }).join("") + '</div>' +
-            '<div class="met-legend2"><span class="met-lk"><span class="met-sw opens"></span>Opens</span><span class="met-lk"><span class="met-sw people"></span>People</span></div>'
-          : '<div class="wire-msg">No activity recorded yet.</div>';
+        if (mt) mt.innerHTML = weeklyActivityHtml(data.trend || []);
         // Most-opened resources (open counts).
         // Shared renderer for a "resource · rest ...  N×" count list (most-opened, clicked-while-empty, preview problems).
         function countList(sel, arr, emptyMsg) {
@@ -4637,7 +5028,7 @@
         [].forEach.call(wrap.querySelectorAll(".met-jump"), function (b) { b.addEventListener("click", function () { openTo(shown[+b.getAttribute("data-i")].path, true); }); });
       })
       .catch(function (e) {
-        metricsUnavailable("Couldn’t load metrics (" + escapeHtml(String((e && e.message) || e)) + ").");
+        metricsUnavailable("Couldn’t load metrics (" + pmErr(e) + ").");
       });
   }
   // Fill the Resource Impact section: join current coverage (coverageStats) with recent opens
@@ -4772,14 +5163,27 @@
   /* ============================================================
      PM · ADMIN
      ============================================================ */
+  // One admin heads-up element (Graph secret / Smartsheet token expiry…). Admin shows every level; Progress
+  // shows the ERROR level too (F127): a PM who never opens Admin used to learn about an expired secret from
+  // a broken nightly run instead.
+  function adminAlertEl(a) {
+    var el = document.createElement("div"); el.className = "adm-alert " + (a.level === "error" ? "err" : "warn"); el.setAttribute("role", "alert");
+    el.innerHTML = svg(ICONS.alert) + '<span>' + escapeHtml(a.message || "") + '</span>';
+    return el;
+  }
+  // A dot on the Admin tab while an error-level alert is open, with the count in the accessible name
+  // (the visible "Admin" stays in it — WCAG 2.5.3). Called when /api/me lands.
+  function markAdminTabAlerts() {
+    var n = (PF_ADMIN_ALERTS || []).filter(function (a) { return a.level === "error"; }).length;
+    var tab = document.getElementById("tab-admin"); if (!tab) return;
+    tab.classList.toggle("has-alert", n > 0);
+    if (n > 0) tab.setAttribute("aria-label", "Admin — " + n + " alert" + (n === 1 ? "" : "s") + " need" + (n === 1 ? "s" : "") + " attention");
+    else tab.removeAttribute("aria-label");
+  }
   function renderAdmin() {
     content.innerHTML = head("Product team", "Admin", "Your guide and staff bug reports.");
     var wrap = document.createElement("div"); wrap.className = "view";
-    (PF_ADMIN_ALERTS || []).forEach(function (a) {
-      var el = document.createElement("div"); el.className = "adm-alert " + (a.level === "error" ? "err" : "warn"); el.setAttribute("role", "alert");
-      el.innerHTML = svg(ICONS.alert) + '<span>' + escapeHtml(a.message || "") + '</span>';
-      wrap.appendChild(el);
-    });
+    (PF_ADMIN_ALERTS || []).forEach(function (a) { wrap.appendChild(adminAlertEl(a)); });
     wrap.appendChild(pmGuidePanel());
     // Link health moved to the "To do" inbox on Progress (its findings + the "Check all links" run live there now).
     var bugHead = document.createElement("div"); bugHead.className = "wire-head adm-bughead"; bugHead.innerHTML = svg(ICONS.spec) + '<span>Bug reports</span>';
@@ -4832,7 +5236,7 @@
     var box = document.createElement("div"); box.className = "adm-erase";
     var h = document.createElement("div"); h.className = "wire-head"; h.innerHTML = svg(ICONS.shield) + '<span>Erase a user’s favorites</span>';
     var help = document.createElement("p"); help.className = "adm-erase-help";
-    help.textContent = "Permanently delete every pinned model for one person — e.g. a departed employee, or a right-to-erasure request. It affects only that person and can’t be undone.";
+    help.textContent = "Permanently delete every favorite for one person — e.g. a departed employee, or a right-to-erasure request. It affects only that person and can’t be undone.";
     var row = document.createElement("div"); row.className = "adm-erase-row";
     var input = document.createElement("input"); input.type = "email"; input.className = "adm-erase-input"; input.placeholder = "name@grumbleton.example"; input.setAttribute("aria-label", "Email of the user whose favorites to erase");
     var btn = document.createElement("button"); btn.type = "button"; btn.className = "adm-erase-btn"; btn.textContent = "Erase favorites";
@@ -4941,9 +5345,9 @@
     return apiFetch("/api/bug-reports", { method: "PATCH", body: { id: id, status: status } }).then(function () {
       var badge = card.querySelector(".adm-badge");
       if (badge) { badge.className = "adm-badge " + status; badge.textContent = STATUS_LABELS[status] || status; }
-      showToast(svg(ICONS.ext) + '<span>Updated to <b>' + (STATUS_LABELS[status] || status) + '</b></span>');
+      showToast(svg(ICONS.check) + '<span>Updated to <b>' + (STATUS_LABELS[status] || status) + '</b></span>');
     }).catch(function (e) {
-      showError(svg(ICONS.ext) + '<span>Couldn\'t update — try again.</span>');
+      showError(svg(ICONS.alert) + '<span>Couldn\'t update — try again.</span>');
       throw e; // the caller puts the <select> back where the data actually is
     });
   }
@@ -4952,7 +5356,7 @@
     return apiFetch("/api/bug-reports", { method: "DELETE", body: { id: id } }).then(function () {
       card.style.transition = "opacity .2s"; card.style.opacity = "0";
       setTimeout(function () { card.remove(); }, 200);
-      showToast(svg(ICONS.ext) + '<span>Report deleted.</span>');
+      showToast(svg(ICONS.check) + '<span>Report deleted.</span>');
     }).catch(function (e) {
       showError('<span>Couldn\'t delete — try again.</span>');
       throw e; // the caller re-enables and disarms the button
@@ -4967,10 +5371,13 @@
   function buildIndex() {
     INDEX.length = 0;
     CATALOG.forEach(function (c) {
+      // Other Collateral is not in the tree (it renders as the channel panel), so its channels/products/models
+      // are not navigable rows — only its documents are searchable, and opening one reveals the panel (F129).
+      var oc = c.name === OTHER_COLLATERAL;
       c.families.forEach(function (f) {
-        INDEX.push({ lvl: "Family", name: f.name, mono: false, path: [c.name, f.name], trail: c.name });
+        if (!oc) INDEX.push({ lvl: "Family", name: f.name, mono: false, path: [c.name, f.name], trail: c.name });
         f.products.forEach(function (p) {
-          INDEX.push({ lvl: "Product", name: p.name, mono: false, path: [c.name, f.name, p.name], trail: c.name + " › " + f.name });
+          if (!oc) INDEX.push({ lvl: "Product", name: p.name, mono: false, path: [c.name, f.name, p.name], trail: c.name + " › " + f.name });
           p.models.forEach(function (m) {
             // Include the DECODED model-code words (e.g. "HMX 400 T" → "Tall") in the searchable text, so
             // staff searching the attribute the app itself teaches ("tall", "integrated", "wide", "pullout")
@@ -4986,7 +5393,7 @@
             // explicitly doesn't have.
             var rtypes = RESOURCE_TYPES.filter(function (r) { return !naFor(m, r.name); }).map(function (r) { return r.name; }).join(" ");
             extra = (extra + " " + rtypes).trim();
-            INDEX.push({ lvl: "Model", name: m, mono: true, path: [c.name, f.name, p.name, m], trail: c.name + " › " + f.name + " › " + p.name, extra: extra });
+            if (!oc) INDEX.push({ lvl: "Model", name: m, mono: true, path: [c.name, f.name, p.name, m], trail: c.name + " › " + f.name + " › " + p.name, extra: extra });
             RESOURCE_TYPES.forEach(function (r) {
               var arr = linksFor(m, r.name);
               // Only index resources that actually open (skip empty/broken) — matches the What's New strip,
@@ -5005,12 +5412,26 @@
   // move keyboard focus to the landed node after the innerHTML rebuild. The router path (applyHash: cold
   // load / deep link / back-forward) calls openTo WITHOUT focus, so a page load never steals focus to a
   // deep node — preserving the deliberate earlier decision not to grab focus on restore.
+  // Other Collateral is not in the tree: "opening" one of its paths (a search hit, a breadcrumb, a deep link)
+  // means going to the catalog home, opening the panel and that channel, and scrolling there — openTo into
+  // the tree produced an orphan view with a dead breadcrumb (F129).
+  function revealOtherCollateral(channel) {
+    _preSearchView = null; sel = { prod: null, model: null }; clearSearch(); view = "catalog";
+    render(); syncHash();
+    var det = content.querySelector(".oc-panel"); if (!det) return;
+    det.open = true;
+    var target = null;
+    [].forEach.call(det.querySelectorAll(".oc-channel"), function (cd) { var nm = cd.querySelector(".oc-ch-name"); if (channel && nm && nm.textContent === channel) target = cd; });
+    if (target) target.open = true;
+    try { (target || det).scrollIntoView({ behavior: RM.matches ? "auto" : "smooth", block: "center" }); } catch (e) { (target || det).scrollIntoView(); }
+  }
   function openTo(p, focus) {
+    if (p[0] === OTHER_COLLATERAL) { revealOtherCollateral(p[1]); return; }
     _preSearchView = null; // navigating into the catalog abandons any search-return memory
     if (p.length >= 2) openFams[keyOf([p[0], p[1]])] = true; // expand the target family (keep others open)
     sel.prod = p.length >= 3 ? keyOf([p[0], p[1], p[2]]) : null;
     sel.model = p.length >= 4 ? keyOf(p) : null;
-    flashKey = keyOf(p); if (focus) pendingFocusKey = keyOf(p); searchInput.value = "";
+    flashKey = keyOf(p); if (focus) { pendingFocusKey = keyOf(p); mobileRevealPending = true; } clearSearch(); // a tap-driven jump scrolls to it on phones even at the same depth (F021)
     view = "catalog";
     render(); syncHash();
   }
@@ -5129,7 +5550,9 @@
   }
   var _internalHash = false; // guard so our own hash writes don't re-trigger a restore
   var _restoring = false;    // true while applyHash reflects existing state — normalize via replaceState, never push
-  function syncHash() {
+  // `dismiss` = the user closed the search themselves (cleared the box / Esc): the #q= entry is then
+  // replaced, not kept one Back away as it is when they leave through a result, Home or a tab.
+  function syncHash(dismiss) {
     var target = hashFor(), cur = location.hash || "";
     if (cur === target) return;
     try {
@@ -5145,6 +5568,9 @@
       // (the loop this flag exists to prevent); 50ms is comfortably after delivery and still far below
       // any real user gesture.
       else if (target) { _internalHash = true; location.hash = target; setTimeout(function () { _internalHash = false; }, 50); }
+      // Leaving a search for the bare home view keeps the #q= entry one Back away (F128): a Family row
+      // has no hash of its own, so this replace erased the results the rep had just come from.
+      else if (!dismiss && /^#q=/.test(cur)) { history.pushState(null, "", location.pathname + location.search); }
       else { history.replaceState(null, "", location.pathname + location.search); }
     } catch (e) { _internalHash = false; }
   }
@@ -5173,16 +5599,31 @@
     _restoring = true; // reflect state via replaceState (see syncHash) so a shared resource link doesn't trap Back
     try {
     var h = location.hash || "";
+    // The cold load failed: nothing is known about the catalog, so a deep link can't be judged dead (it
+    // used to be — every shared link then read "no longer in the catalog" and lost its address). Show the
+    // outage panel for the view the hash names and leave the address alone; Retry and the tab-revisit
+    // refresh re-run applyHash once the catalog is in. (F161)
+    if (catalogError && !catalogLoaded && h.indexOf("#/") === 0) { view = "catalog"; render(); syncViewTabs(); return; }
     if (h === "#progress" || h === "#admin" || h === "#metrics" || h === "#styleguide") {
       if (!isPM()) { // a non-PM opened a shared PM link — don't just silently bounce them
-        view = "catalog"; searchInput.value = ""; render(); resetScroll();
+        view = "catalog"; clearSearch(); render(); resetScroll();
         syncHash(); // drop the rejected hash (replaceState while _restoring) so Back can't re-fire this
         showToast('<span>That’s a product-team page — showing the catalog instead.</span>');
         return;
       }
       view = h === "#admin" ? "admin" : h === "#metrics" ? "metrics" : h === "#styleguide" ? "styleguide" : "progress";
       sel = { prod: null, model: null }; // keep openFams so returning to Find keeps expansion
-      searchInput.value = ""; render(); resetScroll(); return;
+      clearSearch(); render(); resetScroll(); return;
+    }
+    // The query is part of the route (#q=…, written by renderSearch): Back from a result lands on the
+    // results with the query intact, instead of a collapsed home that made the rep retype it for every
+    // look-alike model code they wanted to try (F128). Facets start clean; the query is what Back owes.
+    if (h.indexOf("#q=") === 0) {
+      var qv = ""; try { qv = decodeURIComponent(h.slice(3)); } catch (e) { qv = h.slice(3); }
+      if (qv.trim()) {
+        view = "catalog"; sel = { prod: null, model: null }; searchFilter = newFilterState();
+        searchInput.value = qv; renderSearch(qv); syncViewTabs(); resetScroll(); return;
+      }
     }
     if (h.indexOf("#/") === 0) {
       var parts = h.slice(2).split("/").filter(Boolean).map(function (s) {
@@ -5190,7 +5631,7 @@
       });
       if (parts.length) {
         if (!catalogHasPath(parts.slice(0, 4))) { // renamed/removed since the link was shared
-          view = "catalog"; sel = { prod: null, model: null }; searchInput.value = ""; render(); resetScroll();
+          view = "catalog"; sel = { prod: null, model: null }; clearSearch(); render(); resetScroll();
           syncHash(); // don't leave the dead deep link in the address bar to be copied or revisited
           showToast('<span>That link points to something no longer in the catalog — showing the catalog instead.</span>');
           return;
@@ -5210,7 +5651,7 @@
     }
     // root / unrecognized hash → catalog home
     view = "catalog"; sel = { prod: null, model: null }; openFams = {};
-    searchInput.value = ""; render(); resetScroll();
+    clearSearch(); render(); resetScroll();
     } finally { _restoring = false; }
   }
 
@@ -5219,7 +5660,7 @@
   window.PF_logEvent = function (event, detail) {
     try {
       if (!window.PF_getApiToken) return;
-      apiFetch("/api/event", { method: "POST", keepalive: true, body: { event: event, detail: detail || "" } }).catch(function () {});
+      apiFetch("/api/event", { method: "POST", keepalive: true, passive: true, body: { event: event, detail: detail || "" } }).catch(function () {});
     } catch (e) {}
   };
 
@@ -5241,40 +5682,42 @@
     // for real products AND log a bogus search_miss that pollutes the demand list. Say so instead of searching.
     if (catalogError || !INDEX.length) {
       var ew = document.createElement("div"); ew.className = "view";
-      ew.innerHTML = '<div class="sr-head">Couldn’t load the catalog right now — search is unavailable. Please refresh in a moment.</div>';
+      ew.innerHTML = catalogOutage({ denied: catalogDenied, lead: catalogDenied ? null : "Search needs the catalog, so it can\u2019t run yet. Try again in a moment; if it keeps happening, sign out and sign back in." }); // the same box + delegated Retry as every other view (F136)
       content.innerHTML = ""; content.appendChild(ew);
       return;
+    }
+    // The query is part of the route: a result click pushes the model hash on top of this entry, so Back
+    // returns to these results with the query intact (F128). The first search from a non-search view
+    // PUSHES (the view the rep was on stays one Back away); further typing REPLACES, so the history holds
+    // one entry per search, not one per keystroke. A restore (applyHash on #q=) already has the address.
+    if (!_restoring) {
+      var qh = "#q=" + encodeURIComponent(q.trim());
+      if ((location.hash || "") !== qh) {
+        try { history[/^#q=/.test(location.hash || "") ? "replaceState" : "pushState"](null, "", location.pathname + location.search + qh); } catch (e) {}
+      }
     }
     var query = q.trim().toLowerCase();
     if (window.PF && PF.expandSearchQuery) query = PF.expandSearchQuery(query, RUNTIME_ALIASES); // fr→Hoardmaster, tobacco wall→goblet rack, + PM runtime aliases
     // Match every whitespace-separated token against the item name AND its path/trail, so
     // "Hoardmaster 400" or "hanging 400i" finds the model even though the name alone is "HMX 400I".
-    var tokens = PF.tokenizeQuery(query);
+    var tokens = PF.searchTokens(query); // conversational cleanup + the same digit↔letter split queryStillUnmet uses
     var hits = INDEX.filter(function (n) { return PF.searchMatch(tokens, n.name, (n.trail || "") + " " + (n.extra || ""), n.model || n.name); });
-    hits.sort(function (a, b) {
-      var rank = { Live: 0, Model: 1, Product: 2, Family: 2 };
-      var am = rank[a.lvl], bm = rank[b.lvl];
-      if (am !== bm) return am - bm;
-      return a.name.length - b.name.length;
-    });
+    // One shared comparator (exact model typed → named resource → level → …; see PF.rankSearchHits) — the
+    // old "files first, shortest label first" order put a sibling model's flyer above the exact model the
+    // rep typed, and buried a family under 40 file rows.
+    hits = PF.rankSearchHits(hits, tokens);
     // Forgiving fallback: only when an EXACT match found nothing, retry typo-tolerantly ("assemby",
-    // "prpusher", "hpp 40i"). Ranks by fewest typos, then the same level/length order. Keeps the fast
+    // "prpusher", "hpp 40i"). Ranks by fewest typos, then the same order as the exact pass. Keeps the fast
     // exact path unchanged for the common case, and means a rescued typo is NOT logged as a false miss.
     var fuzzy = false;
     if (hits.length === 0 && query.length >= 3 && window.PF && PF.fuzzyPenalty) {
       var scored = [];
       INDEX.forEach(function (n) {
         var pen = PF.fuzzyPenalty(query, n.name + " " + (n.trail || "") + " " + (n.extra || ""), n.model || n.name);
-        if (pen >= 0) scored.push({ n: n, pen: pen });
+        if (pen >= 0) { var c = {}; for (var k in n) c[k] = n[k]; c.pen = pen; scored.push(c); } // a copy: INDEX rows must not carry a stale penalty into the next query
       });
       if (scored.length) {
-        var rank2 = { Live: 0, Model: 1, Product: 2, Family: 2 };
-        scored.sort(function (a, b) {
-          if (a.pen !== b.pen) return a.pen - b.pen;
-          if (rank2[a.n.lvl] !== rank2[b.n.lvl]) return rank2[a.n.lvl] - rank2[b.n.lvl];
-          return a.n.name.length - b.n.name.length;
-        });
-        hits = scored.map(function (s) { return s.n; });
+        hits = PF.rankSearchHits(scored, tokens);
         fuzzy = true;
       }
     }
@@ -5283,9 +5726,12 @@
     // way don't spam the log.
     // Don't record keyboard-mash / nonsense ("zzzqqxnotathing") as demand — it isn't a real "add this next"
     // signal and just clutters the PM worklist + Metrics list (also filtered server-side on read).
-    if (hits.length === 0 && query.length >= 3 && !(window.PF && PF.looksLikeGibberish && PF.looksLikeGibberish(query))) {
+    // Log what was TYPED, not the alias-expanded form: a PM triaging "install video" must see the rep's own
+    // word, not "assembly instructions video", or they can never add the alias that would have answered it.
+    var typed = String(q || "").trim().toLowerCase().replace(/\s+/g, " ");
+    if (hits.length === 0 && typed.length >= 3 && !(window.PF && PF.looksLikeGibberish && PF.looksLikeGibberish(typed))) {
       clearTimeout(_missTimer);
-      _missTimer = setTimeout(function () { if (!_loggedMisses[query]) { _loggedMisses[query] = 1; window.PF_logEvent("search_miss", query); } }, 1500);
+      _missTimer = setTimeout(function () { if (!_loggedMisses[typed]) { _loggedMisses[typed] = 1; window.PF_logEvent("search_miss", typed); } }, 1500);
     } else { clearTimeout(_missTimer); }
     var wrap = document.createElement("div"); wrap.className = "view";
     var srN = hits.length; // count announced to screen readers (post-filter when a facet is active)
@@ -5349,6 +5795,14 @@
     }
     content.innerHTML = "";
     content.appendChild(wrap);
+    // A toolbar control re-renders the whole view, which used to drop keyboard focus to <body> after every
+    // filter step (F032). Put it back on the control that was used; Clear removes itself, so fall back to
+    // the status radio that is now active.
+    if (ftFocusKey) {
+      var ftEl = wrap.querySelector('[data-ft="' + cssEsc(ftFocusKey) + '"]') || wrap.querySelector('.ft-seg-btn.on');
+      ftFocusKey = null;
+      if (ftEl) ftEl.focus();
+    }
     var srReqBtn = document.getElementById("srReqBtn");
     if (srReqBtn) srReqBtn.addEventListener("click", function () { openSearchRequest(q); });
     srAnnounce.textContent = srN + " result" + (srN === 1 ? "" : "s") + " for " + q;
@@ -5358,14 +5812,32 @@
   // two-word search ("Hoardmaster riser") highlighted nothing, because no single result contains the
   // words adjacently in that order. Tokens are matched longest-first so a longer one can't be broken up
   // by a shorter one that is a substring of it, and overlaps are merged before any markup is emitted.
+  // Tokens come from PF.searchTokens — the same split the matcher uses — so a glued "400ipo" or a
+  // hyphenated "hpp-400" marks the codes it matched, and filler is never marked. A CODE token marks only
+  // where a code starts and only in the MODEL part of the label (before " — "): "hpp 400 i" used to mark
+  // every i in "Compliance & Testing". A code letter that matched a decodable name by set membership
+  // ("d" in HMX 200 ID) marks the suffix run it is part of — that is the thing it matched (F124).
   function highlight(text, q) {
     var raw = String(text == null ? "" : text);
-    var toks = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
+    var toks = PF.searchTokens(q);
     if (!toks.length) return escapeHtml(raw);
     toks.sort(function (a, b) { return b.length - a.length; });
     var lower = raw.toLowerCase(), spans = [];
+    var dash = lower.indexOf(" — "), modelPart = dash === -1 ? lower : lower.slice(0, dash);
     toks.forEach(function (t) {
-      for (var i = lower.indexOf(t); i !== -1; i = lower.indexOf(t, i + 1)) spans.push([i, i + t.length]);
+      if (!PF.isCodeToken(t, toks)) {
+        for (var i = lower.indexOf(t); i !== -1; i = lower.indexOf(t, i + 1)) spans.push([i, i + t.length]);
+        return;
+      }
+      var found = false, tDigit = t.charAt(0) >= "0" && t.charAt(0) <= "9";
+      for (var k = modelPart.indexOf(t); k !== -1; k = modelPart.indexOf(t, k + 1)) {
+        var p = k > 0 ? modelPart.charAt(k - 1) : "", pDigit = p >= "0" && p <= "9", pAlpha = p >= "a" && p <= "z";
+        if (!p || (!pDigit && !pAlpha) || pDigit !== tDigit) { spans.push([k, k + t.length]); found = true; }
+      }
+      if (!found && PF.modelCodes(modelPart) && PF.codeMatches(t, modelPart)) {
+        var run = /([a-z]+)\s*$/.exec(modelPart);
+        if (run) spans.push([run.index, run.index + run[1].length]);
+      }
     });
     if (!spans.length) return escapeHtml(raw);
     spans.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
@@ -5434,15 +5906,18 @@
   // action (optional): { label, onClick } renders a button in the toast.
   // The toast-wrap is pointer-events:none so its empty space never blocks the page; the toast itself takes
   // clicks (app.css), so its links work and a click on it dismisses it early (F055/F149).
-  function showToast(html, ms, action, assertive) {
-    var t = document.createElement("div"); t.className = "toast";
+  // cls (optional): extra class on the toast — showError passes "toast-err" (the red failure look).
+  function showToast(html, ms, action, assertive, cls) {
+    var t = document.createElement("div"); t.className = "toast" + (cls ? " " + cls : "");
     // Politeness comes from WHICH region we append into (#toastAlerts vs #toastStatus), not from a
     // role on the toast itself — a role="alert" nested in a role="status" wrap is ambiguous to AT.
     var region = (assertive ? toastAlerts : toastStatus) || toastWrap;
     t.innerHTML = html;
     var timer = null, left = 0, due = 0, gone = false;
     function dismiss() { if (gone) return; gone = true; clearTimeout(timer); timer = null; t.style.transition = "opacity .3s, transform .3s"; t.style.opacity = "0"; t.style.transform = "translateY(8px)"; setTimeout(function () { t.remove(); }, 320); }
-    function run(n) { clearTimeout(timer); left = n; due = Date.now() + n; timer = setTimeout(dismiss, n); }
+    // ms = Infinity is a STICKY toast (the session-expired prompt): no dismiss timer at all — setTimeout with
+    // Infinity fires at once — and a hover's pause/resume must not start one either.
+    function run(n) { clearTimeout(timer); timer = null; left = n; due = Date.now() + n; if (!isFinite(n)) return; timer = setTimeout(dismiss, n); }
     // EVERY toast holds while the pointer or keyboard focus is on it (WCAG 2.2.1), then resumes with the time
     // it had LEFT. It used to be only toasts with a button, restarting at a flat 1.5 s — so a pointer merely
     // crossing the 1-hour "new version" nudge dismissed it for the hour (F062/F133).
@@ -5465,10 +5940,22 @@
     region.appendChild(t);
     run(toastMs(t, ms));
   }
-  function showError(html, ms) { showToast(html, ms, null, true); } // assertive (role=alert) for failures
+  // A failure is assertive (role=alert) AND looks like one: the whole toast turns red — darker red ink on the light
+  // red fill — and stays at least 5 s. It used to be the same dark pill as "Saved." (F134, owner decision 2026-10-07).
+  function showError(html, ms) { showToast(html, Math.max(5000, ms || 0), null, true, "toast-err"); }
+  // A background call found the Microsoft session expired (see apiFetch passive). One sticky, assertive
+  // prompt; its button is the only thing that sends the page to Microsoft, so nothing on screen is lost
+  // without the person choosing it. (F112/F148)
+  var _sessionExpiredShown = false;
+  function sessionExpired() {
+    if (_sessionExpiredShown) return;
+    _sessionExpiredShown = true;
+    showToast(svg(ICONS.alert) + '<span>Your Microsoft session expired. Copy anything you’re editing, then sign in again — it reloads the page.</span>', Infinity,
+      { label: "Sign in again", onClick: function () { if (window.PF_signInAgain) window.PF_signInAgain(); } }, true);
+  }
   // The one "it saved" toast: every catalog write lands in Smartsheet at once and reaches every other
   // browser on its next catalog refresh — hence the fixed tail.
-  function toastSaved(html, ms) { showToast(svg(ICONS.ext) + '<span>' + html + ' Demo — resets when you reload.</span>', ms); }
+  function toastSaved(html, ms) { showToast(svg(ICONS.check) + '<span>' + html + ' Demo — resets when you reload.</span>', ms); }
 
   /* ============================================================
      PREVIEW LIGHTBOX & GALLERIES
@@ -5524,6 +6011,18 @@
   // WIDTH: the page fills the viewer width and scrolls vertically, so a dense doc is readable at a real size
   // instead of a whole-page "Fit" that shrinks it to an unreadable thumbnail on a short/wide window.
   function pdfViewHash() { return "#toolbar=0&view=FitH"; }
+  // Which document viewer? The native PDF-in-iframe is the fast, chrome-free path on desktop — but iOS and
+  // iPadOS Safari ignore fit-to-width and won't zoom inside it, and Android Chrome shows a blank panel (no
+  // inline PDF plugin). Width alone used to choose (≤620px), so iPads, landscape phones and Android tablets
+  // got the broken iframe (F030/F060). Decide by capability once; keep the width rule as a floor.
+  var EMBED_VIEWER = (function () {
+    var ua = navigator.userAgent || "";
+    var apple = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1); // iPadOS reports as Macintosh
+    var android = /Android/.test(ua);
+    var noPdf = navigator.pdfViewerEnabled === false;
+    return apple || android || noPdf;
+  })();
+  function useEmbedViewer() { return EMBED_VIEWER || !!(window.matchMedia && window.matchMedia("(max-width: 620px)").matches); }
   var lbBlobUrl = null; // object URL for a PDF shown in the native viewer (revoke on close/switch)
   function lbClearBlob() { if (lbBlobUrl) { try { URL.revokeObjectURL(lbBlobUrl); } catch (e) {} lbBlobUrl = null; } }
   // Cancel an in-flight preview fetch (notably the slow Office→PDF conversion) when the lightbox closes
@@ -5531,13 +6030,21 @@
   var lbAbort = null;
   function lbAbortInflight() { if (lbAbort) { try { lbAbort.abort(); } catch (e) {} lbAbort = null; } }
   function lbFreshSignal() { lbAbortInflight(); lbAbort = (typeof AbortController !== "undefined") ? new AbortController() : null; return lbAbort ? lbAbort.signal : undefined; }
+  // A person's close goes through history when the preview holds the current entry (see lbBegin), so the
+  // entry is consumed and Back afterwards behaves normally; popstate does the actual close (F126). Closes
+  // driven by navigation (applyHash, Manage Document) call closePreview() directly and leave history alone.
+  function lbDismiss() {
+    if (history.state && history.state.pfPreview) { history.back(); return; }
+    closePreview();
+  }
+  window.addEventListener("popstate", function () { if (lb && !lb.hidden) closePreview(); });
   (function () {
     if (!lb) return;
-    lb.querySelector(".lb-close").addEventListener("click", closePreview);
-    lb.querySelector(".lb-backdrop").addEventListener("click", closePreview);
+    lb.querySelector(".lb-close").addEventListener("click", lbDismiss);
+    lb.querySelector(".lb-backdrop").addEventListener("click", lbDismiss);
     document.addEventListener("keydown", function (e) {
       if (lb.hidden) return;
-      if (e.key === "Escape") closePreview();
+      if (e.key === "Escape") lbDismiss();
       else if (galNav && e.key === "ArrowLeft") galNav.prev();
       else if (galNav && e.key === "ArrowRight") galNav.next();
     });
@@ -5715,9 +6222,25 @@
   // so a call site keeps ONE code path instead of branching around the dialog.
   function pfConfirmIf(cond, opts) { return cond ? pfConfirm(opts) : Promise.resolve(true); }
 
-  function closePreview() { if (lb) { lb.hidden = true; lbSel.stop(); lbAbortInflight(); setDlBusy(false); setShareBusy(false); /* a hung download/share must not leave its button disabled into the NEXT preview */ var b = lb.querySelector(".lb-body"); b.innerHTML = ""; b.classList.remove("doc"); lbClearBlob(); galNav = null; setDownloadAll(null); clearCopyHint(); lbMoreClose(false); lbShare = null; lbFile = null; /* the next preview must not inherit them (F059) */ a11yModal.close(lb.querySelector(".lb-panel")); } }
+  function closePreview() { if (lb) { lb.hidden = true; document.body.classList.remove("lb-open"); lbSel.stop(); lbAbortInflight(); setDlBusy(false); setShareBusy(false); /* a hung download/share must not leave its button disabled into the NEXT preview */ var b = lb.querySelector(".lb-body"); b.innerHTML = ""; b.classList.remove("doc"); lbClearBlob(); galNav = null; setDownloadAll(null); clearCopyHint(); lbMoreClose(false); lbShare = null; lbFile = null; /* the next preview must not inherit them (F059) */ a11yModal.close(lb.querySelector(".lb-panel")); } }
   // Turn a technical fetch error (e.g. "Graph 503", "preview 500") into plain language for the staff-facing
   // preview UI. The raw message still goes to console.error for debugging — staff never see a bare HTTP code.
+  // PM-facing version of friendlyErr: a server-authored 4xx message is shown as-is (escaped); transport
+  // noise ("api 502", "Failed to fetch", "no token", "Graph 403") becomes a sentence a PM can act on, and
+  // the raw text goes to the console (F321). Returns HTML-safe text — callers interpolate it into markup.
+  function pmErr(err) {
+    var m = (err && err.message) ? String(err.message) : String(err || "");
+    var status = err && err.status;
+    var generic = /^(api|graph) \d{3}$/i.test(m.trim());
+    if (status >= 400 && status < 500 && m && !generic && !/no token|sign in/i.test(m)) return escapeHtml(m);
+    if (/no token|\b401\b|sign in/i.test(m)) return "Please sign in again";
+    if (/timed out|timeout/i.test(m)) return "The request timed out — try again";
+    if (/failed to fetch|networkerror|load failed|network request failed/i.test(m)) return "Check your connection and try again";
+    if (/graph 40[34]/i.test(m)) return "SharePoint refused access to that file";
+    if (generic || /\b5\d\d\b/.test(m) || /\b429\b/.test(m)) return "Smartsheet didn’t respond — try again in a moment";
+    console.warn("[pf] " + m);
+    return escapeHtml(m);
+  }
   function friendlyErr(err) {
     var m = (err && err.message) ? String(err.message) : String(err || "");
     var code = (m.match(/\b(\d{3})\b/) || [])[1];
@@ -5731,6 +6254,7 @@
   function lbError(url, msg) {
     if (!lb) return;
     lb.querySelector(".lb-body").innerHTML = '<div class="lb-err"><p>' + escapeHtml(msg) + '</p><a class="lb-openbtn" href="' + escapeAttr(url) + '" target="_blank" rel="noopener">Open in SharePoint →</a></div>';
+    if (srAnnounce) srAnnounce.textContent = msg + " Open in SharePoint link available."; // focus stays on Close; a screen reader otherwise heard nothing (F116)
   }
   // A per-user 403/404 opening a WIRED file is invisible to the daily link-health cron (which checks
   // app-only): the file exists and the cron can read it, but THIS user can't (no SharePoint access) or it
@@ -5769,8 +6293,14 @@
     lb.querySelector(".lb-open").href = openHref;
     var body = lb.querySelector(".lb-body"); body.classList.remove("doc"); body.innerHTML = loadingHtml;
     var first = body.firstElementChild; if (first && first.classList.contains("lb-loading")) first.classList.add("lb-loading-init");
-    lbFile = null; // until this open resolves a file, Download must not grab the previous one (F059)
+    lbFile = null; setDlReady(false); // until this open resolves a file, Download must not grab the previous one (F059) — and stays disabled
     lb.hidden = false; a11yModal.open(lb.querySelector(".lb-panel"), lb.querySelector(".lb-close"));
+    if (srAnnounce) srAnnounce.textContent = "Loading preview"; // the result (a view, or an error) announces itself when it lands
+    document.body.classList.add("lb-open"); // phones: the page behind must not scroll (F157)
+    // One history entry for the open preview, so Back closes it instead of popping a catalog level or
+    // leaving the installed app (F126). Keyed on the live history state, not a flag: a preview reopened by
+    // Manage Document (same entry) must not push a second one.
+    try { if (!(history.state && history.state.pfPreview)) history.pushState({ pfPreview: 1 }, "", location.href); } catch (e) {}
     lb._seq = (lb._seq || 0) + 1; return lb._seq;
   }
   function openPreview(url, title) {
@@ -5784,7 +6314,7 @@
     var lbSig = lbFreshSignal(); // cancels any prior in-flight conversion; aborted on close/switch
     lbWatchdog(_seq, url);
     if (!window.PF_getToken) { lbError(url, "Please sign in again to preview files."); return; }
-    lbFile = { name: null, downloadUrl: null, fileUrl: url };
+    lbFile = { name: null, downloadUrl: null, fileUrl: url }; setDlReady(true); // the SharePoint URL alone is enough for Download's recover path
     var bearer;
     var isImgUrl = /\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/i.test(url);
     window.PF_getToken().then(function (token) {
@@ -5795,6 +6325,7 @@
       var mime = (item.file && item.file.mimeType) || "";
       var dl = item["@microsoft.graph.downloadUrl"] || item["@content.downloadUrl"];
       lbFile = { name: item.name || null, downloadUrl: dl || null, fileUrl: url };
+      prefetchShareFile(url, dl, item.name); // touch devices: have the file ready before the first Share tap (F029)
       var isImg = /^image\//.test(mime) || isImgUrl;
       var bodyEl = lb.querySelector(".lb-body");
       if (isImg && dl) {
@@ -5835,7 +6366,7 @@
       // than the screen gets cut off with no way to see it in full. Microsoft's embeddable viewer IS
       // responsive (fits the width, pinch-to-zoom), so use it on mobile. Desktop keeps the native PDF viewer
       // below (fast, no OneDrive chrome, real zoom/paging) — where it already fits fine.
-      if (window.matchMedia && window.matchMedia("(max-width: 620px)").matches) return showEmbed();
+      if (useEmbedViewer()) return showEmbed();
       // Any document → the browser's native PDF viewer via a blob URL (no OneDrive chrome, full-size,
       // real zoom/paging). PDFs stream directly; Office docs are converted to PDF. Falls back to MS embed.
       return docPdfBlob(url, item.name, dl, lbSig).then(function (blob) {
@@ -5856,13 +6387,16 @@
   function galResolve(url, bearer) {
     // fetchTimeout (not a bare fetch): a hung Graph driveItem resolve must not leave the gallery spinner up
     // forever — browser fetch has no default timeout, so a blackholed connection would never settle Promise.all.
-    return graphJson("https://graph.microsoft.com/v1.0/shares/" + shareId(url) + "/driveItem?$expand=thumbnails($select=small,medium)", bearer)
+    // large (800px) and a 1600px custom rendition ride along: the stage shows the rendition instead of the
+    // multi-MB original (F123); Download still takes the original (`full`).
+    return graphJson("https://graph.microsoft.com/v1.0/shares/" + shareId(url) + "/driveItem?$expand=thumbnails($select=small,medium,large,c1600x1600)", bearer)
       .then(function (item) {
         var full = item["@microsoft.graph.downloadUrl"] || item["@content.downloadUrl"] || null;
         var ts = (item.thumbnails && item.thumbnails[0]) || {};
         var img = isImageFile(item.name, (item.file && item.file.mimeType) || "");
         var thumb = window.PF.pickThumb(ts, 176) || (img ? full : null); // 96×72 gallery strip tiles at 2× → `medium`
-        return { full: full, thumb: thumb, name: item.name, isImage: img };
+        var stage = (ts.c1600x1600 && ts.c1600x1600.url) || (ts.large && ts.large.url) || null;
+        return { full: full, thumb: thumb, stage: stage, name: item.name, isImage: img };
       });
   }
   function openGallery(items, title) {
@@ -5934,6 +6468,7 @@
     function errNode(url, msg) {
       var d = document.createElement("div"); d.className = "lb-err";
       d.innerHTML = '<p>' + escapeHtml(msg) + '</p><a class="lb-openbtn" href="' + escapeAttr(url) + '" target="_blank" rel="noopener">Open in SharePoint →</a>';
+      if (srAnnounce) srAnnounce.textContent = msg + " Open in SharePoint link available.";
       return d;
     }
     var prevBtn = body.querySelector(".gal-prev");
@@ -5974,25 +6509,39 @@
       // not the individual view — so people land in the real folder location. Download still
       // grabs the specific file shown (lbFile below).
       var r = resolved[i], it = items[i];
-      lbFile = { name: (r && r.name) || it.label || null, downloadUrl: (r && r.full) || null, fileUrl: it.url };
+      lbFile = { name: (r && r.name) || it.label || null, downloadUrl: (r && r.full) || null, fileUrl: it.url }; setDlReady(true);
       var isImg = (r && typeof r.isImage === "boolean") ? r.isImage : (it.isImage !== false);
       if (isImg) { // image
-        if (r && r.full) {
+        if (r && (r.stage || r.full)) {
           var img = document.createElement("img"); img.alt = it.label || (r && r.name) || "Product view"; // main content image — never leave alt empty
           // Guard like the doc branch: a late error from a PREVIOUS view's image must not paint over the view
           // the user has since paged to.
           img.onerror = function () { if (idx !== i || lb.hidden) return; setStage(errNode(it.url, "This view couldn’t be displayed.")); };
-          img.src = r.full; setStage(img);
+          // Paint the strip's thumbnail at once (already cached), then swap in the screen-sized rendition when
+          // it lands — the stage used to sit blank while a multi-MB original downloaded (F123/F210). If the
+          // rendition fails, the original is the fallback.
+          var hi = r.stage || r.full;
+          if (r.thumb && r.thumb !== hi) {
+            img.src = r.thumb; img.classList.add("gal-lo");
+            var big = new Image();
+            big.onload = function () { if (idx !== i || lb.hidden) return; img.src = hi; img.classList.remove("gal-lo"); };
+            big.onerror = function () { if (idx !== i || lb.hidden) return; img.classList.remove("gal-lo"); if (hi !== r.full && r.full) img.src = r.full; };
+            big.src = hi;
+          } else { img.src = hi; }
+          setStage(img);
         } else { setStage(errNode(it.url, "This view couldn’t be loaded.")); }
       } else { // document
         var load = document.createElement("div"); load.className = "lb-loading";
         load.innerHTML = '<span class="lb-skel" aria-hidden="true"></span><span>Loading preview…</span>';
         setStage(load);
         var want = i;
+        // Watchdog: a document whose fetch or conversion never settles left "Loading preview…" up forever
+        // (F331). Keyed on the loading element still being in the DOM — any successful paint removes it.
+        setTimeout(function () { if (idx !== want || lb.hidden || !load.isConnected) return; setStage(errNode(it.url, "This preview is taking too long to load.")); }, 30000);
         // On a PHONE, iOS's native PDF-in-iframe ignores fit-to-width so gallery docs get cut off on the
         // right — route them through the responsive MS viewer too (same as the single-doc preview). Desktop
         // keeps the fast native PDF viewer (no OneDrive chrome, full-size), falling back to MS embed on error.
-        if (window.matchMedia && window.matchMedia("(max-width: 620px)").matches) { galEmbed(it, want); }
+        if (useEmbedViewer()) { galEmbed(it, want); }
         else docPdfBlob(it.url, (r && r.name), (r && r.full), sig).then(function (blob) {
           if (idx !== want || lb.hidden) return;
           lbClearBlob(); lbBlobUrl = URL.createObjectURL(blob);
@@ -6064,11 +6613,21 @@
       .then(function (r) { if (!r.ok) { var e = new Error("Graph " + r.status); e.status = r.status; throw e; } return r.json(); });
   }
   function fetchTimeout(url, opts, ms) {
-    var ctrl = new AbortController();
-    var t = setTimeout(function () { ctrl.abort(); }, ms || 15000);
-    return fetch(url, Object.assign({}, opts || {}, { signal: ctrl.signal }))
-      .catch(function (e) { if (e && e.name === "AbortError") throw new Error("timed out"); throw e; })
-      .finally(function () { clearTimeout(t); });
+    var ctrl = new AbortController(), budget = ms || 15000;
+    var t = setTimeout(function () { ctrl.abort(); }, budget);
+    function timedOut(e) { if (e && e.name === "AbortError") throw new Error("timed out"); throw e; }
+    return fetch(url, Object.assign({}, opts || {}, { signal: ctrl.signal })).then(function (r) {
+      // Headers are in. The clock used to stop HERE, so a body that never finished streaming hung "Saving…"
+      // and the catalog load forever (F139/F294). Re-arm the same budget for the body: each reader clears
+      // it when it completes, and an abort mid-body rejects as "timed out" like a header stall does.
+      clearTimeout(t); t = setTimeout(function () { ctrl.abort(); }, budget);
+      ["blob", "json", "text", "arrayBuffer"].forEach(function (k) {
+        var orig = r[k];
+        if (typeof orig !== "function") return;
+        r[k] = function () { return orig.apply(r, arguments).then(function (v) { clearTimeout(t); return v; }, function (e) { clearTimeout(t); timedOut(e); }); };
+      });
+      return r;
+    }, function (e) { clearTimeout(t); timedOut(e); });
   }
   async function fetchFolderChildren(folderUrl, bearer) {
     var url = "https://graph.microsoft.com/v1.0/shares/" + shareId(folderUrl) + "/driveItem/children?$expand=thumbnails($select=small,medium)&$top=200";
@@ -6085,10 +6644,18 @@
   }
   // How many catalog resources point at this exact folder URL — >1 means it's a SHARED folder
   // (filter files by model name); ==1 means a DEDICATED folder (show every file, no naming rules).
+  // How many MODELS reference this folder, through any resource and in any cell shape — a folder-only cell
+  // or a mixed folder + pinned-file cell (the wire tool makes those). Counting only single-link cells read
+  // a shared render folder as DEDICATED and showed every model's files under each (F061). Distinct models,
+  // so one model wiring the folder to two resource types does not flip it to "shared". lib/linkcheck.js
+  // buildRefCount mirrors this for the cron.
   function folderRefCount(url) {
-    var n = 0, cu = window.PF.canonFolderUrl(url); // compare canonically so two spellings of one folder count as one
-    Object.keys(LINKS).forEach(function (k) { var a = normLinks(LINKS[k]); if (a.length === 1 && window.PF.canonFolderUrl(a[0].url) === cu) n++; });
-    return n;
+    var cu = window.PF.canonFolderUrl(url), models = {}; // compare canonically so two spellings of one folder count as one
+    Object.keys(LINKS).forEach(function (k) {
+      var a = normLinks(LINKS[k]);
+      if (a.some(function (l) { return l && l.url && window.PF.looksLikeFolder(l.url) && window.PF.canonFolderUrl(l.url) === cu; })) models[k.split("::")[0]] = 1;
+    });
+    return Object.keys(models).length;
   }
   function listFolderRenders(folderUrl, model, bearer) {
     var shared = folderRefCount(folderUrl) > 1;
@@ -6191,16 +6758,19 @@
   searchInput.addEventListener("input", function () {
     var q = searchInput.value;
     if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+    clearTimeout(_missTimer); // a keystroke means the previous query wasn't the rep's final word — don't log it as a miss
     if (q.trim().length === 0) {
       // Clearing restores the tab the viewer was on before searching (a PM on Progress/Metrics isn't
       // stranded on Find), or the catalog otherwise. Also drop any active result facets so the next
       // search starts clean rather than inheriting a filter from the last one.
       view = _preSearchView || "catalog"; _preSearchView = null; searchFilter = newFilterState();
-      render(); syncViewTabs(); return;
+      render(); syncViewTabs(); syncHash(true); return; // syncHash(dismiss): the #q= entry must not outlive a search the user closed
     }
     if (_preSearchView === null && view !== "catalog") _preSearchView = view; // remember the PM tab we're leaving to search
     view = "catalog";
-    searchTimer = setTimeout(function () { renderSearch(q); syncViewTabs(); }, 120); // debounce keystrokes
+    // The callback re-checks the box: a tab click, Home or a deep link within the 120 ms used to let a
+    // stale renderSearch paint results over the view just chosen (F211).
+    searchTimer = setTimeout(function () { searchTimer = null; if (searchInput.value !== q) return; renderSearch(q); syncViewTabs(); }, 120); // debounce keystrokes
   });
   // ArrowDown from the search box jumps into the results list (paired with the list's roving nav).
   searchInput.addEventListener("keydown", function (e) {
@@ -6240,7 +6810,12 @@
   Array.prototype.forEach.call(document.querySelectorAll(".vtab"), function (btn) {
     btn.addEventListener("click", function () {
       var v = btn.getAttribute("data-view");
-      if (v === view) return;
+      if (v === view) {
+        // Already on Find with search results showing: the tab is the obvious "back to the start" — act as
+        // Home instead of a dead click (F305). Any other re-click of the active tab stays a no-op.
+        if (v === "catalog" && searchInput && searchInput.value.trim()) goHome();
+        return;
+      }
       confirmDiscardStaged().then(function (ok) { if (ok) switchView(v); });
     });
   });
@@ -6248,7 +6823,7 @@
     view = v; _preSearchView = null; // an explicit tab choice supersedes any search-return memory
     // Clear the query too: text left in the box rendered the catalog home underneath a live search, and
     // made the tab-return refetch treat the page as permanently "busy". (applyHash/goHome/openTo do this.)
-    if (searchInput && searchInput.value) { searchInput.value = ""; searchFilter = newFilterState(); }
+    if (searchInput && searchInput.value) clearSearch();
     try { localStorage.setItem("pf-lasttab", v); } catch (e) {} // reopen this tab on a later bare visit
     render(); syncHash(); resetScroll();
   }
@@ -6430,9 +7005,11 @@
         return;
       }
       var url = (lbShare && lbShare.model) ? resourceShareUrl(lbShare.model, lbShare.resource) : location.href;
+      // Both copy methods can fail (a locked-down clipboard, an iframe policy) — it used to end silently (F218).
+      function copyFailed() { showError(LINKICON + '<span>Couldn’t copy the link — copy it from here: <a href="' + escapeAttr(url) + '">' + escapeHtml(url) + '</a></span>', 12000); }
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(url).then(lbCopyDone, function () { if (fallbackCopy(url)) lbCopyDone(); });
-      } else if (fallbackCopy(url)) { lbCopyDone(); }
+        navigator.clipboard.writeText(url).then(lbCopyDone, function () { if (fallbackCopy(url)) lbCopyDone(); else copyFailed(); });
+      } else if (fallbackCopy(url)) { lbCopyDone(); } else copyFailed();
     });
   }
 
@@ -6486,12 +7063,22 @@
   function saveBlob(blob, name) {
     var u = URL.createObjectURL(blob), a = document.createElement("a");
     a.href = u; a.download = name || "download"; document.body.appendChild(a); a.click();
-    setTimeout(function () { URL.revokeObjectURL(u); a.remove(); }, 1500);
+    // iOS asks "Do you want to download?" first; revoking after 1.5 s made a slow "yes" download a dead URL (F155).
+    setTimeout(function () { URL.revokeObjectURL(u); a.remove(); }, 60000);
+  }
+  var lbDlBusy = false, lbDlReady = false;
+  // Download is disabled until the open preview has resolved a file: a click before that (a gallery still
+  // resolving its first item) used to be a silent no-op, and the e2e Download spec caught it once the
+  // larger gallery renditions made that window a second wide.
+  function setDlReady(on) {
+    lbDlReady = !!on;
+    if (lbDownloadBtn && !lbDlBusy) lbDownloadBtn.disabled = !lbDlReady || (lbSel.isOn() && !lbSel.count());
   }
   function setDlBusy(on) {
     if (!lbDownloadBtn) return;
-    lbDownloadBtn.disabled = !!on;
-    lbDownloadBtn.innerHTML = DLICON + '<span>' + (on ? "Saving…" : "Download") + '</span>';
+    lbDlBusy = !!on;
+    lbDownloadBtn.disabled = !!on || !lbDlReady || (lbSel.isOn() && !lbSel.count()); // not ready, or an empty pick, disables it like Copy and Download all
+    lbDownloadBtn.innerHTML = DLICON + '<span>' + (on ? "Saving…" : window.PF.selectionLabel("Download", "Download selected", lbSel)) + '</span>';
   }
   // Re-resolve a fresh pre-authenticated downloadUrl from the stable SharePoint URL. The downloadUrl captured
   // at preview-open expires (~1h), so Download on a long-open preview 404s — and the OLD fallback handed that
@@ -6502,6 +7089,17 @@
       .then(function (token) { return graphJson("https://graph.microsoft.com/v1.0/shares/" + shareId(fileUrl) + "/driveItem", "Bearer " + token); })
       .then(function (item) { return { url: item["@microsoft.graph.downloadUrl"] || item["@content.downloadUrl"] || null, name: item.name || null }; });
   }
+  function downloadFailedToast(name, freshUrl, fileUrl) {
+    var links = [];
+    if (freshUrl) links.push('<a href="' + escapeAttr(safeUrl(freshUrl) || "#") + '" download="' + escapeAttr(name || "") + '" target="_blank" rel="noopener">download it</a>');
+    if (fileUrl) links.push('<a href="' + escapeAttr(safeUrl(fileUrl) || "#") + '" target="_blank" rel="noopener">open it in SharePoint</a>');
+    showError(DLICON + '<span>Couldn’t save <span class="tmono">' + escapeHtml(name || "the file") + '</span> here' + (links.length ? ' — ' + links.join(' or ') : '') + '.</span>', 15000);
+  }
+  // Select mode: the visible Download takes the picks (it used to save only the file on stage — F138).
+  function downloadClick() {
+    if (lbSel.isOn() && lbAllFiles) { downloadAll(); return; }
+    downloadCurrent();
+  }
   function downloadCurrent() {
     var f = lbFile;
     if (!f || (!f.downloadUrl && !f.fileUrl)) return;
@@ -6511,14 +7109,11 @@
       showToast(DLICON + '<span>Downloading <span class="tmono">' + escapeHtml(name || f.name || "file") + '</span>…</span>');
       setDlBusy(false);
     }
-    // Hand a KNOWN-FRESH pre-authed URL to the browser (docs download via content-disposition; images open in
-    // a tab) — the read-blocked-but-valid path.
-    function handToBrowser(dl, name) {
-      var a = document.createElement("a"); a.href = dl; if (name) a.download = name;
-      a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove();
-      setDlBusy(false);
-    }
-    function openInSharePoint() { setDlBusy(false); if (f.fileUrl) window.open(f.fileUrl, "_blank", "noopener"); }
+    // By the time a fallback runs the click is long spent, so an anchor click to a new tab or window.open is
+    // popup-blocked — and the download ended silently (F140/F213). A link the person clicks carries its own
+    // activation, so hand the fresh URL and the SharePoint page back as links.
+    function handToBrowser(dl, name) { setDlBusy(false); downloadFailedToast(name || f.name, dl, f.fileUrl); }
+    function openInSharePoint() { setDlBusy(false); downloadFailedToast(f.name, null, f.fileUrl); }
     // Cached downloadUrl missing or stale → re-resolve a fresh one, retry the fetch, and only then fall back
     // (fresh-URL <a>, else the always-valid SharePoint page). Never reuse the expired URL.
     function recover() {
@@ -6538,7 +7133,7 @@
   }
   if (lbDownloadBtn) {
     setDlBusy(false);
-    lbDownloadBtn.addEventListener("click", downloadCurrent);
+    lbDownloadBtn.addEventListener("click", downloadClick);
   }
 
   // ---- "Share to customer": the native phone share sheet with the actual file attached ----
@@ -6548,12 +7143,31 @@
   // (mobile Safari/Chrome, Windows share sheet) — on unsupported desktops it stays hidden and Download leads.
   var SHAREICON = svg('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/>');
   var lbShareBtn = document.getElementById("lbShareBtn");
-  var lbShareBusy = false;
-  function setShareBusy(on) {
+  var lbShareBusy = false, lbShareReady = false;
+  // Prepared share files, keyed by the URL set and kept ~2 minutes. On a slow network the share sheet is
+  // refused because the tap's activation lapsed while the files downloaded; the old toast promised "quicker
+  // the second time" while nothing was kept, so every retry failed the same way (F023/F029). Now the second
+  // tap shares from memory at once, and the button says so.
+  var shareCache = { key: "", files: null, at: 0 };
+  var shareTouch = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+  function shareKeyOf(urls) { return (urls || []).slice().sort().join("\n"); }
+  function shareCacheGet(key) { return (shareCache.files && shareCache.key === key && Date.now() - shareCache.at < 120000) ? shareCache.files : null; }
+  function shareCachePut(key, files) { shareCache = { key: key, files: files, at: Date.now() }; }
+  // Touch devices: fetch the single file shown as soon as the preview resolves, so the first Share tap has
+  // the file in hand and the sheet opens inside the tap's activation window.
+  function prefetchShareFile(fileUrl, dl, name) {
+    if (!shareTouch || !dl || !(navigator.canShare && navigator.share)) return;
+    var key = shareKeyOf([fileUrl]);
+    if (shareCacheGet(key)) return;
+    fetchTimeout(dl, {}, 30000).then(function (r) { if (!r.ok) throw new Error("prefetch " + r.status); return r.blob(); })
+      .then(function (b) { try { shareCachePut(key, [new File([b], name || "file", { type: b.type || "application/octet-stream" })]); } catch (e) {} })
+      .catch(function () {});
+  }
+  function setShareBusy(on, ready) {
     if (!lbShareBtn) return;
-    lbShareBusy = !!on;
+    lbShareBusy = !!on; lbShareReady = !on && !!ready;
     lbShareBtn.disabled = !!on || (lbSel.isOn() && !lbSel.count());
-    lbShareBtn.innerHTML = SHAREICON + '<span>' + (on ? "Preparing…" : window.PF.selectionLabel("Share to customer", "Share selected", lbSel, MODEL_SHARE_CAP)) + '</span>';
+    lbShareBtn.innerHTML = SHAREICON + '<span>' + (on ? "Preparing…" : lbShareReady ? "Files ready — tap to send" : window.PF.selectionLabel("Share to customer", "Share selected", lbSel, MODEL_SHARE_CAP)) + '</span>';
   }
   function shareCurrent() {
     if (lbSel.isOn()) { // Share selected: the picked files through the same core as the whole-model share
@@ -6567,14 +7181,21 @@
     var f = lbFile;
     if (!f || (!f.downloadUrl && !f.fileUrl)) return;
     if (!(navigator.canShare && navigator.share)) { downloadCurrent(); return; } // no Web Share → the download path
+    var key = shareKeyOf([f.fileUrl]), cached = shareCacheGet(key);
+    function send(file, name) {
+      shareCachePut(key, [file]);
+      navigator.share({ files: [file], title: name || f.name || "" })
+        .then(function () { setShareBusy(false); })
+        .catch(function (err) { shareRejected(err, f.name || "", function () { setShareBusy(false, true); }); });
+    }
+    if (cached) { send(cached[0], f.name); return; } // in hand already → the sheet opens inside this tap
     setShareBusy(true);
     function got(blob, name) {
       var file = null;
       try { file = new File([blob], name || f.name || "file", { type: blob.type || "application/octet-stream" }); } catch (e) {}
       setShareBusy(false);
-      if (file && navigator.canShare({ files: [file] })) {
-        navigator.share({ files: [file], title: name || f.name || "" }).catch(function (err) { shareRejected(err, f.name || ""); });
-      } else { saveBlob(blob, name || f.name); } // device can't share files → just save it
+      if (file && navigator.canShare({ files: [file] })) send(file, name);
+      else saveBlob(blob, name || f.name); // device can't share files → just save it
     }
     function fail() { setShareBusy(false); downloadCurrent(); } // blob unreadable → fall back to the robust download path
     function viaFresh() {
@@ -6608,9 +7229,9 @@
     });
     return entries;
   }
-  function setModelShareBusy(btn, on, n) {
+  function setModelShareBusy(btn, on, n, ready) {
     if (!btn) return; btn.disabled = !!on || (modelSel.isOn() && !modelSel.count());
-    btn.innerHTML = SHAREICON + '<span>' + (on ? ("Preparing" + (n ? " " + n + " file" + (n === 1 ? "" : "s") : "") + "…") : window.PF.selectionLabel("Share to customer", "Share selected", modelSel)) + '</span>';
+    btn.innerHTML = SHAREICON + '<span>' + (on ? ("Preparing" + (n ? " " + n + " file" + (n === 1 ? "" : "s") : "") + "…") : ready ? "Files ready — tap to send" : window.PF.selectionLabel("Share to customer", "Share selected", modelSel)) + '</span>';
   }
   function modelShareCustomerBtn(m) {
     var b = document.createElement("button"); b.type = "button"; b.className = "share-pack res-share-cust";
@@ -6624,10 +7245,17 @@
   // NotAllowedError. Both call sites used to swallow every rejection as "the user tapped cancel", so the
   // button simply reset and reps concluded the feature was broken. AbortError IS the real cancel; anything
   // else has to say what happened and what to do about it.
-  function shareRejected(err, label) {
+  function shareRejected(err, label, onLapsed) {
     if (err && err.name === "AbortError") return; // the person closed the share sheet — nothing to report
-    showError('<span>Your phone closed the share sheet while ' + (label ? escapeHtml(label) + "’s files were" : "the file was") +
-      ' being prepared. Tap Share to customer again — it’s quicker the second time — or use Download.</span>', 8000);
+    if (err && err.name === "NotAllowedError" && onLapsed) {
+      // The tap's activation lapsed while the files downloaded. They are kept now (see shareCache), so the
+      // next tap opens the sheet at once — say exactly that, and let the button say it too (F023/F029).
+      onLapsed();
+      showError('<span>Your phone needs the tap right when the files are ready — and they’re ready now. Tap <b>Files ready — tap to send</b>.</span>', 10000);
+      return;
+    }
+    showError('<span>Your phone closed the share sheet before ' + (label ? escapeHtml(label) + "’s files" : "the file") +
+      ' could be attached. Tap Share to customer again, or use Download.</span>', 8000);
   }
   // The share core both surfaces use: resolve each entry to a fresh downloadUrl, fetch it as a File, hand
   // the set to the share sheet (dropping trailing files if the OS refuses the whole set). `setBusy(on, n)`
@@ -6636,6 +7264,16 @@
     if (!(navigator.canShare && navigator.share)) return Promise.resolve();
     if (!files.length) { showToast('<span>No files to share for ' + escapeHtml(title) + ' yet.</span>'); return Promise.resolve(); }
     if (!window.PF_getToken) { showToast('<span>Please sign in again to share.</span>'); return Promise.resolve(); }
+    var key = shareKeyOf(files.map(function (e) { return e.url; }));
+    var fileName = function (e) { return e.name || e.resource || "a file"; };
+    // The set is already in hand (a refused or repeated share) → open the sheet inside THIS tap (F023/F029).
+    var cached = shareCacheGet(key);
+    if (cached) {
+      return navigator.share({ files: cached, title: title }).then(function () {
+        setBusy(false);
+        showToast(svg(ICONS.check) + '<span>Shared ' + cached.length + ' file' + (cached.length === 1 ? '' : 's') + ' for ' + escapeHtml(title) + '.' + (note || '') + '</span>', note ? 9000 : undefined);
+      }).catch(function (err) { shareRejected(err, title, function () { setBusy(false, files.length, true); }); });
+    }
     setBusy(true, files.length);
     return window.PF_getToken().then(function (token) {
       var bearer = "Bearer " + token;
@@ -6650,16 +7288,32 @@
       }));
     }).then(function (objs) {
       setBusy(false);
-      var fl = objs.filter(Boolean), prepared = fl.length;
+      var fl = objs.filter(Boolean);
+      // Files that would not resolve or download are named, before and after sharing — they used to vanish
+      // from the count without a word (F141).
+      var missing = files.filter(function (e, i) { return !objs[i]; }).map(fileName);
       if (!fl.length) { showError('<span>Couldn’t prepare these files to share. Open a resource and use Download instead.</span>', 7000); return; }
-      // If the OS rejects the whole set (too many/large), drop trailing files until it accepts.
+      // Per file FIRST: one file of a type the phone won't share (an Office document on some devices) used to
+      // make the whole-set loop pop every valid PDF before it, then report "too large" (F063).
+      var unshareable = fl.filter(function (f) { return !navigator.canShare({ files: [f] }); }).map(function (f) { return f.name; });
+      fl = fl.filter(function (f) { return navigator.canShare({ files: [f] }); });
+      var accepted = fl.length;
+      // Then the set: if the OS rejects the whole set (too many/large), drop trailing files until it accepts.
       while (fl.length && !navigator.canShare({ files: fl })) fl.pop();
-      if (!fl.length) { showError('<span>These files are too large to share at once — send them a few at a time with Download.</span>', 7000); return; }
-      var trimmed = fl.length < prepared;
+      if (!fl.length) {
+        showError(unshareable.length ? '<span>Your phone can’t share ' + escapeHtml(unshareable.join(", ")) + ' this way — use Download for ' + (unshareable.length === 1 ? 'it' : 'them') + '.</span>'
+          : '<span>These files are too large to share at once — send them a few at a time with Download.</span>', 8000);
+        return;
+      }
+      var trimmed = fl.length < accepted;
+      shareCachePut(key, fl);
+      var leftOut = unshareable.concat(missing);
       navigator.share({ files: fl, title: title }).then(function () {
-        var extra = note || (trimmed ? ' Some files were too many to attach — use Download for the rest.' : '');
-        showToast(svg(ICONS.ext) + '<span>Shared ' + fl.length + ' file' + (fl.length === 1 ? '' : 's') + ' for ' + escapeHtml(title) + '.' + extra + '</span>', extra ? 9000 : undefined);
-      }).catch(function (err) { shareRejected(err, title); }); // a user cancel is fine; a lapsed gesture is not
+        var extra = note || '';
+        if (trimmed) extra += ' Some files were too many to attach — use Download for the rest.';
+        if (leftOut.length) extra += ' Couldn’t ' + (missing.length ? 'prepare' : 'attach') + ' ' + escapeHtml(leftOut.join(", ")) + ' — use Download for ' + (leftOut.length === 1 ? 'it' : 'those') + '.';
+        showToast(svg(ICONS.check) + '<span>Shared ' + fl.length + ' file' + (fl.length === 1 ? '' : 's') + ' for ' + escapeHtml(title) + '.' + extra + '</span>', extra ? 10000 : undefined);
+      }).catch(function (err) { shareRejected(err, title, function () { setBusy(false, files.length, true); }); }); // a user cancel is fine; a lapsed gesture is not
     }).catch(function () {
       setBusy(false);
       showError('<span>Couldn’t share these files just now. Open a resource and use Download instead.</span>', 7000);
@@ -6669,8 +7323,8 @@
     if (!(navigator.canShare && navigator.share)) return;
     var entries = gatherModelShareEntries(m);
     if (modelSel.isOn()) entries = entries.filter(function (e) { return modelSel.has(e.resource); }); // Share selected: picked rows only
-    var plan = window.PF.selectModelShareFiles(entries, { cap: MODEL_SHARE_CAP, renderResources: ["Renders"] });
-    var note = plan.setAside > 0 ? ' Renders weren’t included — open Renders and use “Download all” to send those images.' : '';
+    var plan = window.PF.selectModelShareFiles(entries, { cap: MODEL_SHARE_CAP, renderResources: ["Renders", "In-Store Images"] });
+    var note = plan.setAside > 0 ? ' Image folders weren’t included — open Renders or In-Store Images and use “Download all” to send those.' : '';
     shareFileEntries(plan.files, m, function (on, n) { setModelShareBusy(btn, on, n); }, note);
   }
 
@@ -6695,11 +7349,14 @@
   function syncLbSelLabels() {
     var on = lbSel.isOn(), n = lbSel.count();
     if (lbAllFiles) setDownloadAllLabel(window.PF.selectionLabel("Download all (" + lbAllFiles.length + ")", "Download selected", lbSel), on && !n);
-    if (!lbShareBusy) setShareBusy(false);
+    if (!lbShareBusy) setShareBusy(false, lbShareReady);
+    if (lbDownloadBtn && !lbDlBusy) { lbDownloadBtn.innerHTML = DLICON + '<span>' + window.PF.selectionLabel("Download", "Download selected", lbSel) + '</span>'; lbDownloadBtn.disabled = !lbDlReady || (on && !n); }
     if (lbCopyBtn) { lbCopyBtn.innerHTML = LINKICON + '<span>' + window.PF.selectionLabel("Copy link", "Copy selected links", lbSel) + '</span>'; lbCopyBtn.disabled = on && !n; }
   }
   function downloadAll() {
     if (!lbAllFiles || !lbAllFiles.length) return;
+    if (lbDownloadAllBtn && lbDownloadAllBtn.disabled) return; // a run in progress must not be restarted under itself (F217)
+    var seq = lb._seq; // the preview this run belongs to — a newer preview keeps its own button untouched (F335)
     // Download selected: the picked tiles (strip order); otherwise every file, as before.
     var files = lbSel.isOn() ? lbSel.pick(lbGalKeys || []).map(function (i) { return lbAllFiles[i]; }).filter(Boolean) : lbAllFiles.slice();
     if (!files.length) return;
@@ -6714,19 +7371,24 @@
       return attempt.then(function (b) { saveBlob(b, f.name); }, function () {
         return freshDownloadUrl(f.fileUrl).then(function (r) {
           if (!r.url) throw new Error("no fresh url");
-          return fetchBlob(r.url).then(function (b) { saveBlob(b, r.name || f.name); }, function () {
-            var a = document.createElement("a"); a.href = r.url; if (r.name || f.name) a.download = r.name || f.name; a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove();
-          });
+          // No third try through a popup-blocked anchor click: it never opened anything and was counted as saved
+          // (F327). A failure here lands in the links toast below, which the person can act on.
+          return fetchBlob(r.url).then(function (b) { saveBlob(b, r.name || f.name); });
         });
       }).then(function () { saved++; }, function () { failed++; if (f.fileUrl) unsaved.push(f); });
     }
     // Sequential with a small gap so a rapid burst of saves doesn't trip the browser's download throttle.
     files.reduce(function (chain, f, i) {
-      return chain.then(function () { setDownloadAllLabel("Downloading " + (i + 1) + "/" + total + "…", true); return one(f); })
+      return chain.then(function () { if (lb._seq === seq && !lb.hidden) setDownloadAllLabel("Downloading " + (i + 1) + "/" + total + "…", true); return one(f); })
         .then(function () { return new Promise(function (res) { setTimeout(res, 250); }); });
     }, Promise.resolve()).then(function () {
+      if (lb._seq !== seq || lb.hidden) return; // the person moved on — never relabel the next gallery's button (F335)
       syncLbSelLabels();
       if (!failed) {
+        if (shareTouch) { // a phone hands each file to its own download prompt — "Saved N of N" was a claim (F156)
+          showToast(DLALLICON + '<span>Started ' + saved + ' download' + (saved === 1 ? '' : 's') + ' — your phone may ask to allow each one.</span>', 8000);
+          return;
+        }
         // First multi-file save on this device: the browser's own "allow multiple downloads?" prompt is
         // easy to miss; say it once so a silent second file doesn't read as a failure.
         var firstMulti = false;
@@ -6751,6 +7413,12 @@
   // React to back/forward navigation and externally pasted links.
   window.addEventListener("hashchange", function (e) {
     if (_internalHash) { _internalHash = false; return; }
+    // Before the catalog is in, a hash can't be judged — and one DOES arrive then: MSAL restores the
+    // pre-sign-in URL (its replaceHash) while handling the redirect, so a colleague opening a shared
+    // model link signed-out landed here against an EMPTY catalog, was told the link was "no longer in the
+    // catalog", and had the hash erased. The startup chain applies the landing hash once the catalog has
+    // loaded (or failed — applyHash then parks it on the outage screen). (F009)
+    if (!catalogLoaded && !catalogError) return;
     if (!pmHasStagedEdits()) { applyHash(); return; }
     // Staged edits on screen: put the address back on the view still showing while we ask (replaceState
     // fires no hashchange), then go where the user was heading only on "Discard" (F146).
@@ -6777,14 +7445,15 @@
     if (now - _lastRevisitRefetch < 60000) return;
     _lastRevisitRefetch = now;
     var wasError = catalogError;
-    loadCatalog().then(function () {
+    loadCatalog({ passive: true }).then(function () { // background: an expired session prompts, never redirects (F112)
       // Never repaint under someone. A modal, a typed query — or the keyboard focus sitting inside the
       // content we're about to replace: render() rebuilds #content, which drops focus to <body> and loses
       // a keyboard user's place mid-task (WCAG 2.4.3).
       var focusInside = content && document.activeElement && document.activeElement !== document.body && content.contains(document.activeElement);
-      var busy = (lb && !lb.hidden) || (searchInput && searchInput.value.trim()) || focusInside;
+      var busy = (lb && !lb.hidden) || (searchInput && searchInput.value.trim()) || focusInside || modelSel.isOn() || lbSel.isOn(); // picks in progress too (F162)
       if (busy) return;
-      if (wasError || view === "catalog") render(); // recovered from the error screen, or a normal refresh
+      if (wasError) { applyHash(); return; } // recovered from the error screen: reopen what the address names (F161)
+      if (view === "catalog") render(); // a normal refresh
     }).catch(function () {});
   });
 
@@ -6830,7 +7499,7 @@
     document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") check(); });
   })();
 
-  // ---- Report a bug (floating button + modal) ----
+  // ---- Report a bug (top-bar icon button + modal) ----
   var BUGICON = svg('<path d="M21 14a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7.2v3.4"/><path d="M12 13.2h.01"/>');
   var bugFab = document.getElementById("bugFab");
   var bugModal = document.getElementById("bugModal");
@@ -6849,12 +7518,16 @@
     return "Home / catalog";
   }
   var bugResourceUrl = null; // set by "Flag" so the report links the exact previewed file (preview is closed before submit)
+  var bugPrefill = ""; // what openBug put in the box itself — never saved back as a "draft" (F325)
   function openBug(prefill, resourceUrl) {
     if (!bugModal) return;
     bugResourceUrl = resourceUrl || null;
     // Restore an unsent draft rather than wiping it. A backdrop mis-click used to discard a long report
     // silently, and reopening started from blank. An explicit prefill (the "report this file" path) wins.
-    bugText.value = prefill || bugDraft || "";
+    // A leftover "[Content flag] …" marker is a flag the user abandoned, not a report in progress — a
+    // general report must not start with it.
+    bugPrefill = prefill || "";
+    bugText.value = prefill || (bugDraft && !/^\[Content flag\]/.test(bugDraft) ? bugDraft : "");
     var ctx = document.getElementById("bugCtx");
     if (ctx) ctx.textContent = "We’ll automatically include where you are (" + bugContext() + ") and your name and email so we can follow up.";
     bugSubmit.disabled = false; bugSubmit.textContent = "Send report";
@@ -6894,7 +7567,7 @@
   });
   // Whatever is in the box when the modal closes, unless it was sent. Cleared on a successful submit.
   var bugDraft = "";
-  function closeBug() { if (bugModal) { bugDraft = bugText ? bugText.value : ""; bugModal.hidden = true; a11yModal.close(bugModal.querySelector(".bugm-panel")); } }
+  function closeBug() { if (bugModal) { bugDraft = bugText ? (bugText.value === bugPrefill ? "" : bugText.value) : ""; bugModal.hidden = true; a11yModal.close(bugModal.querySelector(".bugm-panel")); } }
   if (bugFab) { bugFab.innerHTML = BUGICON; bugFab.addEventListener("click", function () { openBug(); }); }
   if (bugModal) {
     document.getElementById("bugClose").addEventListener("click", closeBug);
@@ -6956,6 +7629,14 @@
       dupeResourceRows: arr(d.dupeResourceRows)
     };
   }
+  // The outage box's Sign out: the same Hub-only sign-out the user chip performs (signin.js owns it), so there
+  // is exactly one sign-out path. With no chip on the page (never signed in), a reload lands on the gate anyway.
+  content.addEventListener("click", function (e) {
+    var b = e.target && e.target.closest ? e.target.closest("#catSignOut") : null;
+    if (!b) return;
+    var out = document.querySelector(".signout");
+    if (out) out.click(); else location.reload();
+  });
   // The outage panel's Retry. Delegated: the panel is re-rendered by every view, so a per-render binding
   // would have to be repeated at each call site (and was missed at one). A failed retry re-renders the
   // panel with a fresh, enabled button, so there is nothing to reset here.
@@ -6963,7 +7644,14 @@
     var b = e.target && e.target.closest ? e.target.closest("#catRetry") : null;
     if (!b) return;
     b.disabled = true; b.textContent = "Loading…";
-    loadCatalog();
+    loadCatalog().then(function () {
+      // loadCatalog only loads; nothing repainted, so the button sat on "Loading…" forever after either
+      // outcome. Success: re-run the landing hash against the loaded catalog (a parked deep link opens, a
+      // typed query runs). Failure: re-render the panel with a fresh, enabled button. (F006)
+      if (!catalogLoaded) { render(); return; }
+      if (searchInput && searchInput.value.trim()) { view = "catalog"; renderSearch(searchInput.value); syncViewTabs(); return; }
+      applyHash();
+    });
   });
   // Newest catalog snapshot this tab applied, and the server time of its last successful save (both server
   // ISO times). /api/catalog caches per warm instance for up to 5 min, so a tab-revisit reload could hand
@@ -6983,7 +7671,7 @@
     // apiFetch carries the status on the error: a 403 means this ACCOUNT isn't authorized (a B2B guest, or
     // an address outside the allowed domains), which no amount of refreshing fixes — the generic outage
     // screen sent those users into a refresh loop. Anything else genuinely is "try again".
-    return apiFetch("/api/catalog" + (opts && opts.fresh ? "?fresh=1" : ""), { fresh: true }).then(function (data) {
+    return apiFetch("/api/catalog" + (opts && opts.fresh ? "?fresh=1" : ""), { fresh: true, passive: !!(opts && opts.passive) }).then(function (data) {
       // Older than what this tab already has, or than its own last save? Keep the current (optimistic)
       // state — the next load brings the newer copy.
       if (catalogLoaded && data && window.PF.catalogSnapshotStale(data.generatedAt, catAppliedAt, catWriteFloor)) return;
@@ -7073,11 +7761,18 @@
         if (isPM()) {
           var pmTabs = document.querySelectorAll('.vtab[data-view="progress"], .vtab[data-view="metrics"], .vtab[data-view="admin"]');
           for (var i = 0; i < pmTabs.length; i++) pmTabs[i].classList.remove("vtab-pm-hidden");
+          // The nav itself is PM-only too: for a rep it held one tab ("Find") that could never switch anywhere
+          // (F135, owner decision 2026-10-07). Same fail-closed reveal as the tabs — hidden in the markup, shown here.
+          var nav = document.querySelector(".viewnav"); if (nav) nav.classList.remove("viewnav-pm-hidden");
+          markAdminTabAlerts();
           var mgBtn = document.getElementById("lbManageBtn"); if (mgBtn) mgBtn.hidden = false; // reveal "Manage placements" in the preview
+          try { localStorage.setItem("pf-pm", "1"); } catch (e) {} // this browser has hosted a PM (per-owner: wiped with the other pf-* keys on a user change)
         } else if (meFailed) {
           // Couldn't DETERMINE PM status (not a confirmed "no") — don't leave a real PM silently locked out
-          // of their workspace; make it recoverable.
-          try { showToast("Couldn’t confirm your access. If you manage products, refresh to load your tools.", 12000, { label: "Refresh", onClick: function () { location.reload(); } }, true); } catch (e) {}
+          // of their workspace; make it recoverable. Only where a PM has signed in before: every rep with a
+          // flaky /api/me used to get a 12-second alert about tools they don't have. (F317)
+          var wasPM = false; try { wasPM = localStorage.getItem("pf-pm") === "1"; } catch (e) {}
+          if (wasPM) try { showToast("Couldn’t confirm your access. If you manage products, refresh to load your tools.", 12000, { label: "Refresh", onClick: function () { location.reload(); } }, true); } catch (e) {}
         }
       });
     // First-run nudge: once, if the viewer has no favorites yet, hint that models can be pinned.
@@ -7086,7 +7781,7 @@
         if (localStorage.getItem("pf-fav-nudged")) return;
         localStorage.setItem("pf-fav-nudged", "1");
         if (favGet().length) return; // already a favorites user — no nudge needed
-        showToast('<span>Tip: pin models you use often with <b>☆ Add to favorites</b> — they’ll wait at the top of Find.</span>', 8000);
+        showToast('<span>Tip: star the models you use often with <b>☆ Add to favorites</b> — they’ll wait at the top of Find.</span>', 8000);
       } catch (e) {}
     }
     // Read the landing hash BEFORE applyHash runs. applyHash can CLEAR it — a deep link to something that
@@ -7095,7 +7790,19 @@
     // landing, and jumped to Progress — directly contradicting the "showing the catalog instead" toast the
     // user had just been shown.
     var bootHash = location.hash;
-    Promise.all([loadCatalog(), meP]).then(applyHash).then(function () {
+    var catP = loadCatalog();
+    // First paint used to wait on /api/me as well (PM status + favorites, with a retry: 1–3 s, worse under
+    // load) for EVERYONE. Paint Find as soon as the catalog is in, unless the landing needs the PM answer
+    // first: a PM page hash, or a bare landing whose remembered tab is a PM page (painting Find and then
+    // jumping to Progress would flash). PM tabs and synced favorites reveal themselves when /me lands. (F122)
+    var lastTab = null; try { lastTab = localStorage.getItem("pf-lasttab"); } catch (e) {}
+    var bare = !bootHash || bootHash === "#";
+    var needsMe = /^#(progress|admin|metrics|styleguide)$/.test(bootHash) || (bare && !!lastTab && lastTab !== "catalog");
+    var painted = false;
+    var firstPaint = needsMe ? meP : catP.then(function () { applyHash(); painted = true; });
+    Promise.all([catP, meP, firstPaint]).then(function () {
+      if (!painted) applyHash();
+    }).then(function () {
       // A search typed during load showed a "loading" placeholder (not a false miss) — resolve it now.
       if (searchInput && searchInput.value.trim()) { view = "catalog"; renderSearch(searchInput.value); syncViewTabs(); return; }
       // Remember-last-tab: on a bare landing (no deep-link hash), reopen the tab last used, if it's available

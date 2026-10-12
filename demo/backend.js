@@ -149,13 +149,14 @@
       if (path === "/api/placements") {
         if (method === "GET") return ok({ review: s.placements.review, pending: s.placements.pending, skip: s.placements.skip, noAuto: s.placements.noAuto });
         var pu = body && body.url, pa = body && body.action;
-        if (!pu || ["keep", "remove", "dismiss"].indexOf(pa) === -1) return err(400, { error: "Bad request" });
+        if (!pu || ["keep", "remove", "dismiss", "undismiss"].indexOf(pa) === -1) return err(400, { error: "Bad request" });
+        if (pa === "undismiss") s.placements.skip = s.placements.skip.filter(function (u) { return u !== pu; });
         var drop = function (x) { return x.url !== pu; };
         s.placements.review = s.placements.review.filter(drop);
         if (pa !== "keep") s.placements.pending = s.placements.pending.filter(drop);
         if (pa === "remove") s.placements.noAuto.push(pu);
         if (pa === "dismiss") s.placements.skip.push(pu);
-        return ok({ ok: true, action: pa, status: pa === "keep" ? "kept" : pa === "remove" ? "removed" : "dismissed", existed: true });
+        return ok({ ok: true, action: pa, status: pa === "keep" ? "kept" : pa === "remove" ? "removed" : pa === "undismiss" ? "open" : "dismissed", existed: true });
       }
       if (path === "/api/unsorted") {
         if (method === "GET") return ok({ items: s.unsorted });
