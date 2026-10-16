@@ -44,9 +44,18 @@
   function doc(model, kind, label) { return file(label + "/" + model + " " + kind + ".pdf", kind.toLowerCase().split(" ")[0] + ":" + model); }
 
   // --- Hoard Management ---
+  // Product documents: one warranty, one overview and one flyer cover the whole Hoardmaster range, so every
+  // model links the SAME file (the Find page shows them once on the product card); spec sheets stay per model.
+  var hmWarranty = doc("Hoardmaster", "Warranty", "Warranty"), hmOverview = doc("Hoardmaster", "Product Overview", "Overviews");
+  var hmFlyer = [
+    { label: "Flyer (page 1)", url: file("Flyers/Hoardmaster Flyer p1.pdf", "flyer:Hoardmaster:1") },
+    { label: "Flyer (page 2)", url: file("Flyers/Hoardmaster Flyer p2.pdf", "flyer:Hoardmaster:2") }
+  ];
   ["Hoardmaster 3000", "Hoardmaster 3000 X", "Hoardmaster 3000 XF", "Hoardmaster 5000 D"].forEach(function (m) {
     links[m + "::Spec Sheet"] = doc(m, "Spec Sheet", "Spec Sheets");
-    links[m + "::Warranty"] = doc(m, "Warranty", "Warranty");
+    links[m + "::Warranty"] = hmWarranty;
+    links[m + "::Product Overview"] = hmOverview;
+    links[m + "::Flyer"] = hmFlyer.slice();
   });
   links["Hoardmaster 3000::Assembly Instructions"] = doc("Hoardmaster 3000", "Assembly Instructions", "Assembly");
   links["Hoardmaster 3000 X::Assembly Instructions"] = doc("Hoardmaster 3000 X", "Assembly Instructions", "Assembly");
@@ -58,14 +67,13 @@
   links["Hoardmaster 3000 X::Renders"] = folder("Renders/Hoardmaster 3000 X", [
     ["Hoardmaster 3000 X loaded.jpg", "photo:hoardmaster-3000-x"], ["Hoardmaster 3000 X on display.jpg", "photo:store-shelf"]
   ]);
-  // … and a two-file flyer (a multi-file resource opens as a gallery).
-  links["Hoardmaster 3000::Flyer"] = [
-    { label: "Flyer (page 1)", url: file("Flyers/Hoardmaster 3000 Flyer p1.pdf", "flyer:Hoardmaster 3000:1") },
-    { label: "Flyer (page 2)", url: file("Flyers/Hoardmaster 3000 Flyer p2.pdf", "flyer:Hoardmaster 3000:2") }
-  ];
+  // … (the range's two-page flyer above is the multi-file resource that opens as a gallery).
   links["Hoardmaster 3000::Training"] = doc("Hoardmaster 3000", "Training", "Training");
   links["Gemtumbler 2::Spec Sheet"] = doc("Gemtumbler 2", "Spec Sheet", "Spec Sheets");
   links["Gemtumbler 2 G::Spec Sheet"] = doc("Gemtumbler 2 G", "Spec Sheet", "Spec Sheets");
+  var gtOverview = doc("Gemtumbler", "Product Overview", "Overviews"); // one overview for both Gemtumblers
+  links["Gemtumbler 2::Product Overview"] = gtOverview;
+  links["Gemtumbler 2 G::Product Overview"] = gtOverview;
   links["Gemtumbler 2::Renders"] = [
     { label: null, url: file("Renders/Gemtumbler 2 front.jpg", "photo:gemtumbler") },
     { label: null, url: file("Renders/Gemtumbler 2 on display.jpg", "photo:store-shelf") }
@@ -77,9 +85,11 @@
     ["Snugrock Classic studio.jpg", "photo:snugrock"], ["Snugrock King in the cave.jpg", "photo:snugrock-cave"],
     ["Mystery Egg Warmer.jpg", "photo:egg-warmer"]
   ]);
+  var snugFlyer = doc("Snugrock", "Flyer", "Flyers"); // one flyer for the pair, like the shared renders folder
   ["Snugrock Classic", "Snugrock King"].forEach(function (m) {
     links[m + "::Spec Sheet"] = doc(m, "Spec Sheet", "Spec Sheets");
     links[m + "::Renders"] = snugFolder;
+    links[m + "::Flyer"] = snugFlyer;
   });
   links["Snugrock King::Warranty"] = doc("Snugrock King", "Warranty", "Warranty");
   links["Snugrock Classic::Training"] = doc("Snugrock Classic", "Training", "Training");

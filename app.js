@@ -18,6 +18,7 @@
     { name: "Renders",               desc: "Product images & 3D renders",                icon: "render" },
     { name: "In-Store Images",       desc: "Photos of the product in real stores",       icon: "camera" },
     { name: "Assembly Instructions", desc: "Build & installation guides",                icon: "wrench" },
+    { name: "Graphics Dielines",     desc: "Print-ready artwork templates",              icon: "dieline" },
     { name: "Compliance & Testing",  desc: "Certifications, regulatory & test results",  icon: "shield" },
     { name: "Warranty",              desc: "Warranty terms & guarantees",                icon: "badge" },
     { name: "Training",              desc: "Guides, videos & sales enablement",          icon: "train" }
@@ -53,6 +54,9 @@
     camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
     // Cut Sheet = a pair of scissors (a "cut" sheet) — distinct from the "spec" document.
     cut: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88"/><path d="M14.47 14.48 20 20"/><path d="M8.12 8.12 12 12"/>',
+    // Graphics Dielines = a flat sheet with a dashed cut outline and two fold lines (what a dieline template
+    // looks like on the print shop's table) — distinct from the document glyphs, which are upright pages.
+    dieline: '<path d="M3.5 6.5h17v11h-17z" stroke-dasharray="2.6 2"/><path d="M9 6.5v11M15 6.5v11"/><path d="M3.5 4v-1.5M20.5 4v-1.5M3.5 20v1.5M20.5 20v1.5"/>',
     shield: '<path d="M12 3l7 3v5c0 4.4-3 8.4-7 9.5C8 19.4 5 15.4 5 11V6z"/><path d="m9 12 2 2 4-4"/>',
     train: '<path d="M22 10 12 5 2 10l10 5 10-5z"/><path d="M6 12v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5"/>',
     ext: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
@@ -137,6 +141,7 @@
   // suppresses a flag for a link the PM just re-wired this session, so the post-save catalog reload
   // (which re-seeds serverHealth before the cron re-checks) can't resurrect the stale "Link issue".
   var serverHealth = {}, serverHealthTs = 0, serverHealthDateOnly = false, healthCleared = {};
+  var serverHealthMoved = {}, serverHealthRepaired = {}; // rename-proof links: nightly "moved" (Repair) + "repaired" (info) findings
 
   /* ============================================================
      RENDER DISPATCHER — view state, render(), document title, tab sync
@@ -687,11 +692,74 @@
     return col;
   }
 
+  // The resources slot is a vertical STACK: the product card (files every model of the product shares) is
+  // always there once a product is picked; the model card (only what differs for that model) sits under it
+  // when a model is picked. Decided per file by identity in PF.splitProductDocs — storage, approvals and
+  // coverage stay per model::resource (spec 2026-10-15-product-vs-model-docs-design.md).
+  var curSplit = null; // { shared, perModel, modelCount } for sel.prod, recomputed on every render
   function resourceColumn() {
-    var p = sel.model.split("§"), m = p[p.length - 1];
-    var col = column("col-res", '<span class="lead-name">' + escapeHtml(m) + decodeSuffixHtml(m) + '</span>', "col-lead mono"); col.setAttribute("data-anim", "rcol:" + sel.model);
-    col._body.appendChild(buildResources(m, col.querySelector(".col-head")));
-    return col;
+    curSplit = null;
+    var pb = prodByKey(sel.prod); if (!pb) return null;
+    curSplit = window.PF.splitProductDocs(pb.p.models, linksFor);
+    // Two cards only when the product really shares something; a multi-model product that shares nothing
+    // renders exactly as before (model panel alone, no tag, no product card).
+    var hasShared = curSplit.modelCount > 1 && Object.keys(curSplit.shared).length > 0;
+    var stack = document.createElement("div"); stack.className = "col-stack"; stack.setAttribute("data-anim", "rstack:" + sel.prod);
+    if (hasShared) {
+      var sub = '<span class="col-sub">Documents every ' + escapeHtml(pb.p.name) + ' model shares · ' + pb.p.models.length + ' models</span>';
+      var pcol = column("col-res col-product", '<span class="lead-name">' + escapeHtml(pb.p.name) + '</span>' + sub, "col-lead");
+      pcol.setAttribute("data-anim", "pcol:" + sel.prod);
+      // column() puts role=heading on the whole header, so its name would include the subtitle; move it to
+      // the product name only (same as buildResources does for the model card).
+      var pHead = pcol.querySelector(".col-head"), pName = pHead && pHead.querySelector(".lead-name");
+      if (pName) { pHead.removeAttribute("role"); pHead.removeAttribute("aria-level"); pName.setAttribute("role", "heading"); pName.setAttribute("aria-level", "2"); }
+      pcol._body.appendChild(buildProductDocs(pb, curSplit));
+      stack.appendChild(pcol);
+    }
+    if (sel.model) {
+      var p = sel.model.split("§"), m = p[p.length - 1];
+      var tag = hasShared ? '<span class="col-tag">Only what differs for this model</span>' : '';
+      // Tag + name share one stacked wrapper: buildResources makes the header a flex row (name | actions), and
+      // a bare tag span would otherwise sit BESIDE the name instead of above it.
+      var col = column("col-res col-model", '<span class="col-titles">' + tag + '<span class="lead-name">' + escapeHtml(m) + decodeSuffixHtml(m) + '</span></span>', "col-lead mono"); col.setAttribute("data-anim", "rcol:" + sel.model);
+      col._body.appendChild(buildResources(m, col.querySelector(".col-head"), hasShared ? curSplit : null));
+      stack.appendChild(col);
+    }
+    return stack.childNodes.length ? stack : null; // a one-model product with no model picked has nothing to show yet
+  }
+  // The model that "owns" a shared link for viewer/health purposes: the first model holding that identity.
+  function firstHolder(pb, type, link) {
+    var c = window.PF.canonFileUrl(link.url);
+    for (var i = 0; i < pb.p.models.length; i++) {
+      var arr = linksFor(pb.p.models[i], type);
+      for (var j = 0; j < arr.length; j++) if (window.PF.canonFileUrl(arr[j].url) === c) return pb.p.models[i];
+    }
+    return pb.p.models[0];
+  }
+  // The product card body: one row per type that has shared files. Rows open the same viewer as model rows;
+  // a broken shared file is broken on every model, so the first holder's health status speaks for all.
+  function buildProductDocs(pb, split) {
+    var box = document.createElement("div"); box.className = "res-panel view"; box.setAttribute("data-anim", "ppanel:" + sel.prod);
+    var list = document.createElement("div"); list.className = "res-list";
+    RESOURCE_TYPES.forEach(function (r) {
+      var arr = split.shared[r.name]; if (!arr || !arr.length) return;
+      // A shared file is on every model, so the SELECTED model always holds it and is the viewer's model
+      // context (opens, flags and bug reports are credited to the model the viewer is on); with no model
+      // selected (the product deep link) fall back to the first model that holds the file.
+      var owner = sel.model ? sel.model.split("§").pop() : firstHolder(pb, r.name, arr[0]);
+      var hs = healthStatusFor(owner, r.name);
+      var icon = '<span class="res-icon">' + svg(ICONS[r.icon]) + '</span>';
+      var bodyHtml = '<span class="res-body"><span class="res-name">' + r.name + '</span><span class="res-desc">' + r.desc + '</span></span>';
+      var el = document.createElement("a"); el.href = arr[0].url; el.target = "_blank"; el.rel = "noopener";
+      el.className = "res" + (hs === "broken" ? " res-broken" : "");
+      el.setAttribute("data-res", r.name);
+      el.innerHTML = icon + bodyHtml + (hs === "broken" ? '<span class="pill bad">' + svg(ICONS.alert) + ' Link issue</span>' : '<span class="pill ok">Preview</span>');
+      var title = pb.p.name + " · " + r.name;
+      el.addEventListener("click", function (e) { resourceClick(e, arr, title, owner, { productPath: [pb.c.name, pb.f.name, pb.p.name] }); });
+      list.appendChild(el);
+    });
+    box.appendChild(list);
+    return box;
   }
 
   /* ============================================================
@@ -892,7 +960,7 @@
   // tick means the whole resource (a Renders folder = all its images); to pick individual files, open the
   // resource and use the gallery's own select mode. Keys = resource names. Reset on every panel build.
   var modelSel = window.PF.makeSelection();
-  function buildResources(m, headEl) {
+  function buildResources(m, headEl, split) {
     modelSel.stop();
     recentPush(m); // record this model as recently viewed (click, deep link, or back/forward all land here)
     var box = document.createElement("div"); box.className = "res-panel view"; box.setAttribute("data-anim", "respanel:" + sel.model);
@@ -996,7 +1064,9 @@
     var list = document.createElement("div"); list.className = "res-list";
     RESOURCE_TYPES.forEach(function (r) {
       if (naFor(m, r.name)) return; // resource type not applicable to this model — don't show it
-      var arr = linksFor(m, r.name);
+      var arr = split ? ((split.perModel[m] || {})[r.name] || []) : linksFor(m, r.name);
+      // A type whose files are ALL shared belongs to the product card: skip it here (it is not missing).
+      if (split && !arr.length && split.shared[r.name] && split.shared[r.name].length) return;
       var hs = arr.length ? healthStatusFor(m, r.name) : null; // 'broken' | 'empty' | null (last Link-health run)
       var icon = '<span class="res-icon">' + svg(ICONS[r.icon]) + '</span>';
       var body = '<span class="res-body"><span class="res-name">' + r.name + '</span><span class="res-desc">' + r.desc + '</span>'; // "Updated …" now shows in the preview header
@@ -1051,6 +1121,15 @@
       }
     });
     box.appendChild(list);
+    // A "Nothing differs" model card has no pickable rows: Select would be a dead end ("0 of 0 selected").
+    // Hide (not remove) it so paintModelSel keeps working on the reference.
+    if (split && selBtn && !selKeys.length) selBtn.hidden = true;
+    if (split && !list.childNodes.length) {
+      var pbn = prodByKey(sel.prod), pname = pbn ? pbn.p.name : "the product";
+      var note = document.createElement("div"); note.className = "res-empty-note";
+      note.textContent = "Nothing differs from " + pname + ". Everything for this model is in the product card above.";
+      box.appendChild(note);
+    }
     return box;
   }
 
@@ -1205,7 +1284,8 @@
     var treeEl = familyTreePanel();
     cols.appendChild(treeEl);
     var mc = sel.prod ? modelColumn() : null; if (mc) cols.appendChild(mc);
-    var rc = sel.model ? resourceColumn() : null; if (rc) cols.appendChild(rc);
+    if (!sel.prod) curSplit = null;
+    var rc = sel.prod ? resourceColumn() : null; if (rc) cols.appendChild(rc);
     content.appendChild(cols);
 
     // MOBILE: the columns can't sit side-by-side. Place the opened Models/Resources as full-width blocks
@@ -1220,7 +1300,8 @@
       var after = catBox; // insertion point: just after the category box (falls back to leaving them in .cols)
       if (mc && after) { after.insertAdjacentElement("afterend", mc); after = mc; }
       if (rc && after) { after.insertAdjacentElement("afterend", rc); after = rc; }
-      anchorCol = rc || mc; // scroll target = the opened block
+      // scroll target = the opened block: a model tap lands on the model card, a product tap on the Models list
+      anchorCol = sel.model ? ((rc && rc.querySelector(".col-model")) || rc || mc) : (mc || rc);
     }
     scopeEntranceAnim(content); // suppress re-animation of elements that were already on screen
 
@@ -1303,7 +1384,7 @@
   function covBar(pct) { return '<div class="cov-bar"><div class="cov-bar-fill" data-barw="' + pct + '"></div></div>'; }
   // Short column/chip labels. The matrix HEADER now uses the resource icons instead (T3-14), but the
   // coverage chips still need a text form that fits.
-  var COV_SHORT = { "Flyer": "Flyer", "Product Overview": "Ovrvw", "Spec Sheet": "Spec", "Cut Sheet": "Cut", "Renders": "Rndr", "In-Store Images": "In-Store", "Assembly Instructions": "Asmbly", "Compliance & Testing": "C&T", "Warranty": "Warr", "Training": "Trng" };
+  var COV_SHORT = { "Flyer": "Flyer", "Product Overview": "Ovrvw", "Spec Sheet": "Spec", "Cut Sheet": "Cut", "Renders": "Rndr", "In-Store Images": "In-Store", "Assembly Instructions": "Asmbly", "Graphics Dielines": "Dieline", "Compliance & Testing": "C&T", "Warranty": "Warr", "Training": "Trng" };
   // Repaint ONLY the Progress summary %/counts + per-type bars in place after an inline link edit —
   // the top summary would otherwise stay stale until a tab switch. Deliberately NOT a full
   // renderCoverage() so any in-progress wire-tool drag work survives (same reasoning as fillMatrix).
@@ -2958,6 +3039,35 @@
     if (!pmHasStagedEdits()) return Promise.resolve(true);
     return pfConfirm({ title: "Discard these changes?", body: ["You have unsaved link changes. Leaving now throws them away — nothing has been saved yet."], confirmLabel: "Discard", danger: true });
   }
+  // Rename-proof links: the nightly check found this resource's file under a new folder. Swap old → new in
+  // every model of the product that holds the old link, through the normal write path (base = pre-image).
+  function repairMovedLink(model, resource, moved) {
+    if (!moved || !moved.url || !moved.newUrl) return Promise.reject(new Error("No new address is known for this file yet."));
+    var p = findModelPath(model); if (!p) return Promise.reject(new Error("Model not found in the catalog."));
+    var fam = p[1], prod = p[2];
+    var prodNode = null;
+    CATALOG.forEach(function (c) { c.families.forEach(function (f) { if (f.name !== fam) return; f.products.forEach(function (pp) { if (pp.name === prod) prodNode = pp; }); }); });
+    var assignments = {}, base = {}, finals = {};
+    (prodNode ? prodNode.models : [model]).forEach(function (m) {
+      var curLinks = linksFor(m, resource), cur = curLinks.map(function (l) { return l.url; });
+      if (cur.indexOf(moved.url) === -1) return;
+      base[m] = cur.slice();
+      var out = [], seen = {};
+      curLinks.forEach(function (l) { var v = l.url === moved.url ? moved.newUrl : l.url; if (!seen[v]) { seen[v] = 1; out.push({ label: l.label, url: v }); } });
+      finals[m] = out;
+      assignments[m] = out.map(function (l) { return l.url; }).join(" ");
+    });
+    if (!Object.keys(assignments).length) return Promise.reject(new Error("That link is no longer on this model."));
+    // Mirror what landed into LINKS (the one writer, labels kept) and clear the flag, so the row drops at once.
+    function mirror(models) {
+      models.forEach(function (m) { setLinks(m + "::" + resource, finals[m]); clearHealthFor(m + "::" + resource); delete serverHealthMoved[m + "::" + resource]; });
+    }
+    return postWire(fam, prod, resource, assignments, { base: base }).then(function (res) {
+      mirror(Object.keys(assignments));
+      showToast('<span>Repaired — ' + escapeHtml(moved.name) + ' now opens from its new folder.</span>');
+      return res;
+    }, function (err) { if (err && err.wrote) mirror(err.wrote); throw err; }); // a partial write still happened for err.wrote
+  }
   function openFixEditorFor(model, resource, fallbackPath) {
     var target = null;
     coverageStats().groups.forEach(function (g) { if (g.models.some(function (m) { return m.name === model; })) target = g; });
@@ -3884,6 +3994,18 @@
       g.models.forEach(function (mm) {
         RESOURCE_TYPES.forEach(function (r) {
           if (naFor(mm.name, r.name)) return;
+          var key = mm.name + "::" + r.name;
+          // Rename-proof links: the nightly check found the file under a new folder (Repair swaps it in), or
+          // fixed a rename by itself overnight (info only). A moved key also reads "broken" in the health map,
+          // so it must be handled before the generic Link issue branch.
+          // Only a move with a known new address is repairable; without one it stays a plain Link issue below.
+          if (serverHealthMoved[key] && serverHealthMoved[key].newUrl && !healthCleared[key]) {
+            // healthCleared is memory-only: after a Repair and a reload the nightly flag is still served until the
+            // next run. If the app already holds the new address and no longer the old one, it IS repaired.
+            var heldUrls = linksFor(mm.name, r.name).map(function (l) { return l.url; });
+            if (heldUrls.indexOf(serverHealthMoved[key].newUrl) !== -1 && heldUrls.indexOf(serverHealthMoved[key].url) === -1) return;
+            items.push({ prio: 0, tag: "Moved", cls: "bad", model: mm.name, resource: r.name, moved: serverHealthMoved[key], note: "now " + serverHealthMoved[key].name }); return; }
+          if (serverHealthRepaired[key]) items.push({ prio: 3, tag: "Repaired", cls: "ok", model: mm.name, resource: r.name, note: serverHealthRepaired[key].detail });
           var hs = healthStatusFor(mm.name, r.name);
           if (hs === "broken") items.push({ prio: 0, tag: "Link issue", cls: "bad", model: mm.name, resource: r.name });
           else if (hs === "empty") items.push({ prio: 1, tag: "Work in progress", cls: "warn", model: mm.name, resource: r.name });
@@ -3915,7 +4037,7 @@
     box.innerHTML = '<summary class="wire-head todo-head">' + svg(ICONS.alert) + '<span role="heading" aria-level="2">To Do</span> <span class="ftp-badge todo-total" hidden></span></summary>' +
       '<div class="todo-boxes"></div>';
     var boxesEl = box.querySelector(".todo-boxes");
-    var counts = { issues: 0, empty: 0, review: 0, place: 0, sort: 0, search: 0, reports: 0, fill: 0 }, errored = {};
+    var counts = { issues: 0, empty: 0, review: 0, repaired: 0, place: 0, sort: 0, search: 0, reports: 0, fill: 0 }, errored = {};
     // Tiles that WILL report. The three token-gated ones are registered at their call sites, so a signed
     // -out/PM-less session doesn't wait forever for loaders that never run.
     var awaiting = { issues: 1, empty: 1, review: 1, place: 1, sort: 1 };
@@ -3932,6 +4054,7 @@
       // /api/placements, or /api/usage-insights leaves the inbox looking empty while work is actually unknown.
       var anyErr = !!(errored.issues || errored.place || errored.sort || errored.search || errored.reports);
       box.hidden = total === 0 && soft === 0 && !anyErr;
+      if (counts.repaired) box.hidden = false; // the overnight-repair receipt is information only: it shows the box but never adds to a count
       var tb = box.querySelector(".todo-total");
       if (tb) {
         var busy = counting();
@@ -3953,6 +4076,11 @@
     var review = todoBox("Needs review", "todo-review", svg(ICONS.edit), null, false); // collapsed by default — non-urgent
     review.querySelector(".ftp-badge").classList.add("amber");
     review._onCount = function (n) { counts.review = n; settled("review"); review.hidden = n === 0; reconcile(); };
+    // Rename-proof links: files the nightly run re-linked by itself after a rename. Information only (no
+    // button, no red count) — it is the PM's receipt that something changed overnight.
+    var repaired = todoBox("Repaired overnight", "todo-repaired", svg(ICONS.edit), "renamed on SharePoint, re-linked automatically", false);
+    repaired.querySelector(".ftp-badge").classList.add("amber");
+    repaired._onCount = function (n) { counts.repaired = n; repaired.hidden = n === 0; reconcile(); };
     // Render one fix-work tile. `withRecheck` adds the "Re-check links" action — only on the health-based
     // Link Issues tile; the Needs-review tile is date-based, so a re-check can't clear its rows.
     function fillFixTile(boxEl, items, withRecheck) {
@@ -3965,12 +4093,25 @@
         ? '<ul class="wl-list">' + top.map(function (it, i) {
             return '<li class="wl-row" data-i="' + i + '"><span class="lh-badge ' + it.cls + '">' + it.tag + '</span>' +
               '<span class="wl-where"><b>' + escapeHtml(it.model) + '</b> · ' + escapeHtml(it.resource) + (it.note ? ' <span class="wl-note">' + escapeHtml(it.note) + '</span>' : '') + '</span>' +
-              '<button class="wire-btn primary wl-fix" type="button" aria-label="Fix ' + escapeAttr(it.model + " " + it.resource) + '">Fix</button></li>';
+              (it.moved ? '<button class="wire-btn primary wl-repair" type="button" aria-label="Repair ' + escapeAttr(it.model + " " + it.resource) + '">Repair</button>' : "") +
+              (it.tag === "Repaired" ? "" : '<button class="wire-btn ' + (it.moved ? "" : "primary ") + 'wl-fix" type="button" aria-label="Fix ' + escapeAttr(it.model + " " + it.resource) + '">Fix</button>') + '</li>';
           }).join("") + '</ul>' + (items.length > 20 ? '<div class="wire-msg">Showing 20 of ' + items.length + '.</div>' : '') + recheck
         : "";
       [].forEach.call(host.querySelectorAll(".wl-fix"), function (b) {
         var it = top[+b.closest(".wl-row").getAttribute("data-i")];
         b.addEventListener("click", function () { openFixEditorFor(it.model, it.resource); });
+      });
+      [].forEach.call(host.querySelectorAll(".wl-repair"), function (b) {
+        var it = top[+b.closest(".wl-row").getAttribute("data-i")];
+        b.addEventListener("click", function () {
+          var btn = this; btn.disabled = true; btn.textContent = "Repairing…";
+          repairMovedLink(it.model, it.resource, it.moved).then(function () { btn.textContent = "Repaired"; paintFixWork(); },
+            function (e) {
+              btn.disabled = false; btn.textContent = "Repair";
+              if (isConflict(e)) { loadCatalog({ fresh: true }); showError('<span>Another PM changed this resource since this page loaded, so nothing was saved. The page now has the current links — click Repair again.</span>', 12000); return; }
+              showError('<span>Couldn’t repair that link (' + pmErr(e) + ').</span>', 7000);
+            });
+        });
       });
       var rc = host.querySelector(".lh-recheck");
       if (rc) rc.addEventListener("click", function () { runLinkCheck(this, host.querySelector(".lh-status"), function () { paintFixWork(); }); });
@@ -3981,9 +4122,10 @@
       fillFixTile(issues, all.filter(function (it) { return it.prio === 0; }), true);   // broken → red, act now
       fillFixTile(empties, all.filter(function (it) { return it.prio === 1; }), false); // linked but empty → amber
       fillFixTile(review, all.filter(function (it) { return it.prio === 2; }), false);  // aging/stale → amber
+      fillFixTile(repaired, all.filter(function (it) { return it.prio === 3; }), false); // fixed overnight → info only
     }
     _todoIssuesRepaint = paintFixWork;
-    boxesEl.appendChild(issues); boxesEl.appendChild(empties); boxesEl.appendChild(review); paintFixWork();
+    boxesEl.appendChild(issues); boxesEl.appendChild(empties); boxesEl.appendChild(review); boxesEl.appendChild(repaired); paintFixWork();
     // 2. Files to place (async, existing panel) — hide when empty, report its count.
     var ftp = filesToPlacePanel(); ftp.hidden = true;
     ftp._onCount = function (n) { counts.place = n; settled("place"); ftp.hidden = n === 0; reconcile(); };
@@ -4656,6 +4798,7 @@
 
         '<h2 class="pmg-h">Add links to a product</h2>' +
         '<p class="pmg-p">On the <b>Progress</b> tab, open <b>Add files</b> and pick <b>Link a product folder</b> to sort a product folder’s files onto models by type and model from their names (new files in that folder are suggested in <b>To Do › New on SharePoint</b> for you to approve), or click <b>Edit</b> on any product section to add or remove individual links. Each resource stays <b>Work in progress</b> until it has a link that opens to real files. Files that match no model are parked in the <b>Unsorted pile</b> — sort them from <b>To Do › Sort the pile</b>.</p>' +
+        '<p class="pmg-p">On <b>Find</b>, a product shows <b>two cards</b>: the top card lists the files <b>every model</b> of the product shares (one flyer, one spec sheet…), the card under it lists only what is <b>different for the selected model</b> (its renders, in-store photos, a model-specific instruction sheet). The Hub decides this from the links themselves — a file linked on every model is a product document — so to make a document product-wide, link the same file on every model (approving the product folder does that for shared types).</p>' +
         '<p class="pmg-p">You’ll also see a <b>New on SharePoint</b> list in the To&nbsp;Do box at the top of the Progress tab. Every night the site scans your linked folders for new files it can match to a model and <b>suggests</b> them there. Review each one and <b>Add</b> it or <b>Remove</b> it — nothing goes on the live site until you add it.</p>' +
 
         '<h2 class="pmg-h">Manage a file across many products</h2>' +
@@ -4665,16 +4808,16 @@
         '<p class="pmg-p">New products and models come from the Smartsheet, not the app itself. To add one:</p>' +
         '<ol class="wire-help-steps pmg-steps">' +
           '<li><a href="' + FAMILY_TREE_URL + '" target="_blank" rel="noopener">Open the Product Family Tree Smartsheet</a>.</li>' +
-          '<li>Every model needs <b>ten rows</b> — one for each resource type: Flyer, Product Overview, Spec Sheet, Cut Sheet, Renders, In-Store Images, Assembly Instructions, Compliance &amp; Testing, Warranty, Training.</li>' +
-          '<li>Easiest way: find a model like the one you’re adding, select its ten rows, copy them, then insert them as new rows.</li>' +
-          '<li>On <b>every</b> new row fill <b>Category</b>, <b>Family</b>, <b>Product</b>, <b>Models/Variants</b>, and <b>RSS</b> (the resource type). Repeat Category / Family / Product on all ten rows — don’t leave them blank.</li>' +
+          '<li>Every model needs <b>eleven rows</b> — one for each resource type: Flyer, Product Overview, Spec Sheet, Cut Sheet, Renders, In-Store Images, Assembly Instructions, Graphics Dielines, Compliance &amp; Testing, Warranty, Training.</li>' +
+          '<li>Easiest way: find a model like the one you’re adding, select its eleven rows, copy them, then insert them as new rows.</li>' +
+          '<li>On <b>every</b> new row fill <b>Category</b>, <b>Family</b>, <b>Product</b>, <b>Models/Variants</b>, and <b>RSS</b> (the resource type). Repeat Category / Family / Product on all eleven rows — don’t leave them blank. A type that does not apply to the model (most models have no Graphics Dielines) gets <b>N/A</b> in its URL cell, or use <b>Mark N/A</b> in the app — it then disappears from that model and from its coverage count.</li>' +
           '<li>Leave <b>SP Folder URL</b> empty for now — you’ll add the links from the Progress tab.</li>' +
           '<li>Save. The product appears on the site within about a minute, with every resource marked <b>Work in progress</b> until you link it.</li>' +
         '</ol>' +
-        '<p class="pmg-note">Tips: spell each resource type exactly as above (Flyer, Product Overview, Spec Sheet, Cut Sheet, Renders, In-Store Images, Assembly Instructions, Compliance &amp; Testing, Warranty, Training) so the app recognizes it. A brand-new <b>Family</b> or <b>Category</b> just means typing a new name in that column. To add a single variant to an existing product, copy just that product’s ten-row block and rename the model.</p>' +
+        '<p class="pmg-note">Tips: spell each resource type exactly as above (Flyer, Product Overview, Spec Sheet, Cut Sheet, Renders, In-Store Images, Assembly Instructions, Graphics Dielines, Compliance &amp; Testing, Warranty, Training) so the app recognizes it. A brand-new <b>Family</b> or <b>Category</b> just means typing a new name in that column. To add a single variant to an existing product, copy just that product’s eleven-row block and rename the model.</p>' +
 
         '<h2 class="pmg-h">Check that every link works</h2>' +
-        '<p class="pmg-p">On the <b>Progress</b> tab, click <b>Check links</b> (in the coverage toolbar, just above the grid) to test every link. A link that won’t open — moved, deleted, or no access — is flagged as a <b>Link issue</b> (the red flag salespeople see on the Find tab); a folder with no files yet stays <b>Work in progress</b>. Neither counts toward a model’s progress. This check also runs <b>automatically every day</b>, so those flags show for everyone even when no one runs it — run it from Progress when you want to check right now.</p>' +
+        '<p class="pmg-p">On the <b>Progress</b> tab, click <b>Check links</b> (in the coverage toolbar, just above the grid) to test every link. A link that won’t open — moved, deleted, or no access — is flagged as a <b>Link issue</b> (the red flag salespeople see on the Find tab); a folder with no files yet stays <b>Work in progress</b>. Neither counts toward a model’s progress. This check also runs <b>automatically every day</b>, so those flags show for everyone even when no one runs it — run it from Progress when you want to check right now. A file that was <b>renamed</b> on SharePoint is re-linked overnight by itself and shows as <b>Repaired</b> in To do for a day; a file that <b>moved</b> to another folder shows as <b>Moved</b> with a <b>Repair</b> button.</p>' +
         '<p class="pmg-p">Two more states in the grid: a linked resource turns <b>Review</b> once its newest file is over a year old — open it, confirm it’s still current, or replace it. Mark a resource <b>N/A</b> (from a product section’s <b>Edit</b> view) when it genuinely doesn’t apply to that model — it’s then left out of the model’s progress instead of counting as missing.</p>' +
       '</div>';
     return d;
@@ -5495,6 +5638,12 @@
     if (resource) path = path.concat([resource]);
     return location.origin + location.pathname + location.search + "#/" + path.map(encodeURIComponent).join("/");
   }
+  // Model-less deep link to a PRODUCT document (a file every model shares): #/Cat/Fam/Prod/all/Resource.
+  // "all" is a reserved segment — applyHash routes it to the product card; no model may be named "all".
+  function productResourceShareUrl(path3, resource) {
+    var path = path3.concat(["all", resource]);
+    return location.origin + location.pathname + location.search + "#/" + path.map(encodeURIComponent).join("/");
+  }
   // ---- "Share pack": copy every in-app link for a model (or a whole product) to the clipboard, as BOTH
   // rich HTML (clickable labels in Outlook/Teams) and plain text ("Name: url"). Hub deep-links, not raw
   // SharePoint URLs, so they survive a file being re-linked/moved (each resolves to whatever's wired now).
@@ -5630,6 +5779,18 @@
         try { return decodeURIComponent(s); } catch (e) { return s; }
       });
       if (parts.length) {
+        if (parts[3] === "all") { // #/Cat/Fam/Prod/all/Resource → the product card + the shared file's preview
+          if (!catalogHasPath(parts.slice(0, 3))) {
+            view = "catalog"; sel = { prod: null, model: null }; clearSearch(); render(); resetScroll(); syncHash();
+            showToast('<span>That link points to something no longer in the catalog — showing the catalog instead.</span>');
+            return;
+          }
+          openTo(parts.slice(0, 3));
+          var sres = parts[4], sarr = curSplit && curSplit.shared[sres];
+          if (Array.isArray(sarr) && sarr.length) { var spb = prodByKey(sel.prod); openResource(sarr, parts[2] + " · " + sres, firstHolder(spb, sres, sarr[0]), { productPath: parts.slice(0, 3) }); }
+          else if (sres) showToast('<span>That document isn’t shared by every model any more — showing the product instead.</span>', 5000);
+          return;
+        }
         if (!catalogHasPath(parts.slice(0, 4))) { // renamed/removed since the link was shared
           view = "catalog"; sel = { prod: null, model: null }; clearSearch(); render(); resetScroll();
           syncHash(); // don't leave the dead deep link in the address bar to be copied or revisited
@@ -6001,7 +6162,7 @@
   }
   var lb = document.getElementById("lightbox");
   var galNav = null; // {prev, next} while a render gallery is open (for arrow keys)
-  var lbShare = null; // {model, resource} the open lightbox is showing (for its Copy-link button)
+  var lbShare = null; // {model, resource, productPath} the open lightbox is showing (for its Copy-link button)
   // Gallery select mode (T7-17): keys = item index in strip order. Download all / Share / Copy link read it.
   var lbSel = window.PF.makeSelection();
   var lbGalKeys = null, lbGalEntries = null; // the open gallery's indices, and {url, name} per item
@@ -6269,7 +6430,10 @@
   function setLbUpdated(title) {
     var el = document.getElementById("lbUpdated"); if (!el) return;
     var parts = String(title || "").split(" · "), upd = "", stale = false;
-    if (parts.length >= 2) { var r = parts.pop(), m = parts.join(" · "); upd = resUpdatedLabel(m, r); stale = !!(upd && resIsStale(m, r)); }
+    // Prefer the share context (openResource sets it before the opener runs): a product-card title is
+    // "<Product> · <Type>", which names no model, so parsing it would find no freshness date.
+    if (lbShare && lbShare.model && lbShare.resource) { upd = resUpdatedLabel(lbShare.model, lbShare.resource); stale = !!(upd && resIsStale(lbShare.model, lbShare.resource)); }
+    else if (parts.length >= 2) { var r = parts.pop(), m = parts.join(" · "); upd = resUpdatedLabel(m, r); stale = !!(upd && resIsStale(m, r)); }
     el.textContent = upd ? (upd + (stale ? " · review" : "")) : "";
     el.className = "lb-updated" + (stale ? " stale" : "");
   }
@@ -6728,20 +6892,20 @@
   }
   // One entry point for opening a resource: folder → live render gallery, many files → gallery, one file → preview.
   // A mix of folder(s) + file(s) routes to openMixedGallery, which expands the folder(s) into the same gallery.
-  function openResource(arr, title, model) {
+  function openResource(arr, title, model, opts) {
     if (!arr || !arr.length) return;
     // remember what the lightbox is showing so its "Copy link" button can build a deep link
     var rname = (title && title.indexOf("·") !== -1) ? title.split("·").pop().trim() : null;
-    lbShare = { model: model, resource: rname };
+    lbShare = { model: model, resource: rname, productPath: (opts && opts.productPath) || null };
     window.PF_logEvent && window.PF_logEvent("resource_open", model ? (model + (rname ? " · " + rname : "")) : (title || ""));
     if (arr.length === 1 && looksLikeFolder(arr[0].url)) openRenders(arr[0].url, model, title);
     else if (arr.length > 1) { if (arr.some(function (a) { return looksLikeFolder(a.url); })) openMixedGallery(arr, title, model); else openGallery(arr, title); }
     else openPreview(arr[0].url, title);
   }
-  function resourceClick(e, arr, title, model) {
+  function resourceClick(e, arr, title, model, opts) {
     if (e.ctrlKey || e.metaKey || e.shiftKey) return; // modified click → let the browser open SharePoint in a new tab
     e.preventDefault(); e.stopPropagation();
-    openResource(arr, title, model);
+    openResource(arr, title, model, opts);
   }
 
   /* ============================================================
@@ -7004,7 +7168,8 @@
         }, function () { showToast('<span>Couldn’t copy — try again.</span>'); });
         return;
       }
-      var url = (lbShare && lbShare.model) ? resourceShareUrl(lbShare.model, lbShare.resource) : location.href;
+      var url = lbShare && lbShare.productPath ? productResourceShareUrl(lbShare.productPath, lbShare.resource)
+        : (lbShare && lbShare.model) ? resourceShareUrl(lbShare.model, lbShare.resource) : location.href;
       // Both copy methods can fail (a locked-down clipboard, an iframe policy) — it used to end silently (F218).
       function copyFailed() { showError(LINKICON + '<span>Couldn’t copy the link — copy it from here: <a href="' + escapeAttr(url) + '">' + escapeHtml(url) + '</a></span>', 12000); }
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -7686,6 +7851,8 @@
       RUNTIME_HANDLED = (data && Array.isArray(data.handledMisses)) ? data.handledMisses : [];
       // Link health from the daily cron — visible to every user (see healthStatusFor).
       serverHealth = (data && data.health && typeof data.health === "object") ? data.health : {};
+      serverHealthMoved = {}; serverHealthRepaired = {};
+      if (data) { serverHealthMoved = data.healthMoved || {}; serverHealthRepaired = data.healthRepaired || {}; }
       // healthAt is the cron's last-run DATE (e.g. "2026-08-25"). Parse a bare date as LOCAL midnight — NOT
       // Date.parse, which reads "2026-08-25" as UTC midnight and in Central rendered as the PREVIOUS evening
       // ("8/24 7:00 PM"). serverHealthDateOnly tells healthWhen to show the day, not a fabricated clock time.
@@ -7715,7 +7882,7 @@
         catalogStale = true;
       } else {
         catalogError = true; catalogDenied = (err && err.status === 403); // 403 = this account, not an outage
-        CATALOG = []; LINKS = {}; NA = {}; ORPHANS = []; SHEET_HYGIENE = hygieneFrom(null); RUNTIME_ALIASES = []; serverHealth = {}; serverHealthTs = 0; buildIndex();
+        CATALOG = []; LINKS = {}; NA = {}; ORPHANS = []; SHEET_HYGIENE = hygieneFrom(null); RUNTIME_ALIASES = []; serverHealth = {}; serverHealthMoved = {}; serverHealthRepaired = {}; serverHealthTs = 0; buildIndex();
       }
     });
   }

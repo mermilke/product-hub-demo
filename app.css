@@ -316,6 +316,13 @@
      The three columns reading as one row matters more than keeping the middle one on screen. */
   .col { flex: 1 1 280px; min-width: 0; max-width: 480px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow-rest); display: flex; flex-direction: column; animation: colIn .22s cubic-bezier(.2,.7,.3,1); }
   .col-res { flex: 1 1 400px; max-width: 800px; }
+  .col-stack { display: flex; flex-direction: column; gap: var(--sp-12); flex: 1 1 400px; max-width: 800px; min-width: 0; }
+  .col-stack > .col { flex: none; max-width: none; animation: colIn .22s cubic-bezier(.2,.7,.3,1); }
+  .col-head .col-sub { display: block; font-family: var(--font-ui); font-size: var(--fs-10); font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--ink-faint); margin-top: var(--sp-2); }
+  /* Tag above name: one stacked wrapper, so the model header's flex row (name | actions) never puts the tag beside the name. */
+  .col-head .col-titles { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; flex: 1 1 auto; }
+  .col-head .col-tag { display: inline-flex; align-items: center; font-family: var(--font-label); font-size: var(--fs-9); letter-spacing: var(--ls-label-sm); text-transform: uppercase; color: var(--cov-review-ink); background: var(--pending-fill); border-radius: 999px; padding: 2px 8px 0; margin-bottom: var(--sp-6); }
+  .res-empty-note { padding: var(--sp-12); color: var(--ink-soft); font-size: var(--fs-12); border: 1px dashed var(--line); border-radius: var(--r-card); }
   @keyframes colIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
   .col-head { font-family: var(--font-label); font-size: var(--fs-10); letter-spacing: var(--ls-label-sm); text-transform: uppercase; color: var(--ink-faint); padding: var(--sp-13) var(--sp-14) var(--sp-9); border-bottom: 1px solid var(--line); flex: none; overflow-wrap: anywhere; }
   .col-head b { color: var(--ink-soft); font-family: var(--font-mono); font-weight: 600; letter-spacing: 0; text-transform: none; font-size: var(--fs-12); }
@@ -1121,6 +1128,7 @@
      side-scrolling, so each is full width and you scroll down through the path. */
   @media (max-width: 860px) {
     .cols { flex-direction: column; overflow-x: visible; gap: var(--sp-12); }
+    .col-stack { max-width: none; flex: none; width: 100%; }
     .cols > .col, .cols > .col-tree { width: 100%; max-width: none; flex: 0 0 auto; align-self: stretch; }
     /* On a phone the Models/Resources columns are NESTED inline directly under the tapped product/model row
        (see renderColumns) — right where that category lives in the list, not at the top or bottom. Drop the
@@ -1136,6 +1144,7 @@
        next to the buttons and broken mid-word ("FlexR oller"). */
     .col-head.col-head-res { flex-wrap: wrap; }
     .col-head-res .lead-name { flex: 1 1 100%; overflow-wrap: normal; word-break: keep-all; }
+    .col-head-res .col-titles { flex: 1 1 100%; }
     /* The actions take the FULL row width so their buttons wrap onto new lines when they don't fit — without
        flex-basis:100% the row is content-sized and the last button (e.g. "Add to favorites") runs off the
        right edge and is cut off. */

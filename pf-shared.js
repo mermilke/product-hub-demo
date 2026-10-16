@@ -18,7 +18,7 @@
   // Canonical resource-type names (RSS values), in display order. ONE shared copy — the browser reads
   // window.PF.RESOURCES, the serverless handlers require() it — so the vocabulary can't drift across the
   // places it used to be hand-copied (the two API handlers each had their own "must match" array).
-  var RESOURCES = ["Flyer", "Product Overview", "Spec Sheet", "Cut Sheet", "Renders", "In-Store Images", "Assembly Instructions", "Compliance & Testing", "Warranty", "Training"];
+  var RESOURCES = ["Flyer", "Product Overview", "Spec Sheet", "Cut Sheet", "Renders", "In-Store Images", "Assembly Instructions", "Graphics Dielines", "Compliance & Testing", "Warranty", "Training"];
 
   // Matcher for a coded model (e.g. "HMX 400 I"): "<prefix> <number> <letters>". The negative lookahead
   // on a letter keeps "400 I" from matching "400 IR"/"400 IPO" (and "600 I" from "600 IC"), while still
@@ -198,6 +198,34 @@
     if (!a || !b) return false;
     if (a.id && b.id) return String(a.id) === String(b.id);
     return canonFileUrl(a.url) === canonFileUrl(b.url);
+  }
+  // Product documents vs. model documents. A file (identity = canonFileUrl, so "Copy link" spelling variance
+  // and an Office link renamed in its &file= part do not split one file into two) that is linked under EVERY
+  // model of a product is a PRODUCT document and shows once; everything else stays under the model that holds
+  // it. Decided per file, never per type: a type may have shared files AND model files. A product with one
+  // model shares nothing (the renderer shows a single card). Pure: models + a reader in, two maps out.
+  function splitProductDocs(models, linksFor) {
+    models = models || []; var n = models.length;
+    var shared = {}, perModel = {};
+    models.forEach(function (m) { perModel[m] = {}; });
+    RESOURCES.forEach(function (type) {
+      var byModel = models.map(function (m) { return linksFor(m, type) || []; });
+      var holders = {}; // canon -> number of models holding the file
+      byModel.forEach(function (arr) {
+        var seen = {};
+        arr.forEach(function (l) { var c = canonFileUrl(l.url); if (seen[c]) return; seen[c] = 1; holders[c] = (holders[c] || 0) + 1; });
+      });
+      var isShared = function (c) { return n > 1 && holders[c] === n; };
+      var sharedSeen = {}, sharedList = [];
+      (byModel[0] || []).forEach(function (l) { var c = canonFileUrl(l.url); if (isShared(c) && !sharedSeen[c]) { sharedSeen[c] = 1; sharedList.push(l); } });
+      if (sharedList.length) shared[type] = sharedList;
+      models.forEach(function (m, i) {
+        var own = [], ownSeen = {};
+        byModel[i].forEach(function (l) { var c = canonFileUrl(l.url); if (isShared(c) || ownSeen[c]) return; ownSeen[c] = 1; own.push(l); });
+        if (own.length) perModel[m][type] = own;
+      });
+    });
+    return { shared: shared, perModel: perModel, modelCount: n };
   }
   // Split a "SP Folder URL" cell into its individual link URLs. The legacy fat-cell format packs several
   // URLs into one cell separated by whitespace, so the naive split is /\s+/ — but that ALSO tears a single
@@ -658,6 +686,7 @@
     if (/\bwarranty\b/.test(s)) out.push("Warranty");
     if (/\btraining\b/.test(s)) out.push("Training");
     if (/\bin\s?store\b/.test(s)) out.push("In-Store Images"); // "in-store"/"in store"/"instore" photos
+    if (/\bdie\s?lines?\b/.test(s)) out.push("Graphics Dielines"); // "dieline"/"dielines"/"die line": print-ready artwork templates
     return out.filter(function (t, i) { return out.indexOf(t) === i; });
   }
   function resourceFromName(fileName) { return resourceTypesInName(fileName)[0] || null; }
@@ -1245,6 +1274,7 @@
     ["flyer", "Flyer"],
     ["product overview", "Product Overview"], ["overview", "Product Overview"],
     ["in store", "In-Store Images"], ["instore", "In-Store Images"], ["in store images", "In-Store Images"],
+    ["graphics dielines", "Graphics Dielines"], ["graphics dieline", "Graphics Dielines"], ["dielines", "Graphics Dielines"], ["dieline", "Graphics Dielines"], ["die line", "Graphics Dielines"],
     ["renders", "Renders"], ["render", "Renders"],
     ["compliance", "Compliance & Testing"], ["testing", "Compliance & Testing"]
   ];
@@ -1275,7 +1305,7 @@
   // "Goblet Rack for Dairy_Kroger Merch Center_Sep2026_2.jpeg", "Germany_Rewe_HPP_Candy Aisle_July2026_1.jpeg").
   var STORE_SHOT_RE = /(^|[\s_(])(\d{6}|\d{4}[-_.]\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s?\d{4})(?=$|[\s_).])/i;
   // { type, how }: how = "lead" (leading token) | "word" (type named mid-name) | "photo" | "video" | "image" |
-  // null (a PDF/PPTX with no type word — a part-number sheet, a dieline: a human picks or it stays unlinked).
+  // null (a PDF/PPTX with no type word — a part-number sheet: a human picks or it stays unlinked).
   function typeFromFileName(name) {
     var lead = leadTypeFromName(name);
     if (lead) return { type: lead, how: "lead" };
@@ -1465,7 +1495,7 @@
     computeCoverage: computeCoverage, looksLikeGibberish: looksLikeGibberish, normCell: normCell,
     dupeModelNames: dupeModelNames,
     modelRe: modelRe, normModel: normModel, matchesModel: matchesModel,
-    looksLikeFolder: looksLikeFolder, canonFolderUrl: canonFolderUrl, canonFileUrl: canonFileUrl, parseSpUrl: parseSpUrl, normalizeUrl: normalizeUrl, sameFile: sameFile, splitCellUrls: splitCellUrls, lhReason: lhReason, lhTransient: lhTransient, lhBroken: lhBroken,
+    looksLikeFolder: looksLikeFolder, canonFolderUrl: canonFolderUrl, canonFileUrl: canonFileUrl, parseSpUrl: parseSpUrl, normalizeUrl: normalizeUrl, sameFile: sameFile, splitProductDocs: splitProductDocs, splitCellUrls: splitCellUrls, lhReason: lhReason, lhTransient: lhTransient, lhBroken: lhBroken,
     lhCheckResource: lhCheckResource, lhRunPool: lhRunPool,
     osaWithin: osaWithin, fuzzyThreshold: fuzzyThreshold, fuzzyPenalty: fuzzyPenalty,
     codeTokenIn: codeTokenIn, searchMatch: searchMatch, tokenizeQuery: tokenizeQuery, expandSearchQuery: expandSearchQuery, normAlias: normAlias, SEARCH_ALIASES: SEARCH_ALIASES,

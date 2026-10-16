@@ -9,7 +9,7 @@
   else root.PF_DEMO = factory();
 })(this, function () {
   "use strict";
-  var RESOURCES = ["Flyer", "Product Overview", "Spec Sheet", "Cut Sheet", "Renders", "In-Store Images", "Assembly Instructions", "Compliance & Testing", "Warranty", "Training"];
+  var RESOURCES = ["Flyer", "Product Overview", "Spec Sheet", "Cut Sheet", "Renders", "In-Store Images", "Assembly Instructions", "Graphics Dielines", "Compliance & Testing", "Warranty", "Training"];
   var DAY = 86400000;
 
   function clone(x) { return JSON.parse(JSON.stringify(x)); }
