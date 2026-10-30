@@ -10,7 +10,7 @@
 //     Microsoft Graph, SharePoint), and /api/* are all ignored (it doesn't call respondWith), so the
 //     browser handles them exactly as if no service worker existed.
 const CACHE = "ph-shell-v1";
-const SHELL = ["/", "/app.css", "/app.js", "/pf-shared.js", "/demo/demo-signin.js", "/pre-init.js", "/site.webmanifest", "/icons/logo-192.png", "/fonts/inter-400.woff2", "/fonts/inter-600.woff2", "/fonts/inter-700.woff2"];
+const SHELL = ["/", "/app.css", "/app.js", "/pf-shared.js", "/demo/demo-signin.js", "/pre-init.js", "/site.webmanifest", "/icons/logo-192.png", "/fonts/inter-400.woff2", "/fonts/inter-600.woff2", "/fonts/inter-700.woff2", "/fonts/barlow-semicondensed-700.woff2", "/fonts/barlow-semicondensed-600.woff2"];
 
 self.addEventListener("install", function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).catch(function () {}).then(function () { return self.skipWaiting(); }));
@@ -43,8 +43,9 @@ self.addEventListener("fetch", function (e) {
         if (c) return c;
         // Only a NAVIGATION gets the cached shell page. Handing index.html to a <script>/<link>/font
         // request just produces a MIME-type error in the console; a clean network error is what the
-        // browser would have reported without a service worker.
-        return req.mode === "navigate" ? caches.match("/") : Response.error();
+        // browser would have reported without a service worker. A framed preview is a navigation too, but the
+        // whole Hub booting inside it is no answer (F059): top-level pages only.
+        return (req.mode === "navigate" && req.destination === "document") ? caches.match("/") : Response.error();
       });
     })
   );

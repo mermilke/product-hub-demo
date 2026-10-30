@@ -35,7 +35,6 @@
     // Dates relative to "now", so the demo always looks recently used.
     s.added = {}; s.added["Hoardmaster 3000::Flyer"] = ymd(t0 - DAY); s.added["Gemtumbler 2::Renders"] = ymd(t0 - 2 * DAY);
     s.placements.review.concat(s.placements.pending).forEach(function (p, i) { p.at = new Date(t0 - (i + 1) * 5 * 3600000).toISOString(); });
-    s.unsorted.forEach(function (x) { x.addedAt = new Date(t0 - 26 * 3600000).toISOString(); });
     s.bugReports.forEach(function (r, i) { r.created_at = new Date(t0 - (i + 1) * 2 * DAY).toISOString(); });
     s.favorites = []; s.lastWrite = 0; s.nextId = 10000;
     var ids = {}, idN = 0;
@@ -150,7 +149,17 @@
       // Phones use Microsoft's embed viewer (iOS ignores fit-to-width in a PDF iframe); the demo has no such
       // viewer, so it hands back the file itself for the iframe.
       if (sub === "/preview") return s.files[target] ? ok({ getUrl: "demo-file:" + s.files[target].name }) : notFound;
-      if (sub === "/children") return s.folders[target] ? ok({ value: s.folders[target].map(driveItem) }) : notFound;
+      if (sub === "/children") {
+        if (s.folders[target]) return ok({ value: s.folders[target].map(driveItem) });
+        // Any other folder that holds demo files (Flyers, Spec Sheets…) lists them, as SharePoint would: answering 404
+        // for those left a permanent "⚠ 11 folders couldn't be read" on the demo's Progress (F050).
+        var base = String(target).replace(/\/+$/, "") + "/";
+        var inside = Object.keys(s.files).filter(function (u) { return u.indexOf(base) === 0 && u.slice(base.length).indexOf("/") === -1; });
+        // A folder inside the demo library with no demo files in it (the parent of the deliberately broken link) lists
+        // as empty: the broken FILE still fails its own lookup, and the scan shows no error a visitor can't clear.
+        if (inside.length || /\/Shared%20Documents\//.test(base)) return ok({ value: inside.map(driveItem) });
+        return notFound;
+      }
       if (sub === "/content") return s.files[target] ? { status: 200, file: s.files[target].name } : notFound;
       var item = driveItem(target);
       return item ? ok(item) : notFound;
@@ -184,15 +193,6 @@
         if (pa === "dismiss") s.placements.skip.push(pu);
         return ok({ ok: true, action: pa, status: pa === "keep" ? "kept" : pa === "remove" ? "removed" : pa === "undismiss" ? "open" : "dismissed", existed: true });
       }
-      if (path === "/api/unsorted") {
-        if (method === "GET") return ok({ items: s.unsorted });
-        if (body && body.action === "add") {
-          (body.items || []).forEach(function (it) { s.unsorted.push({ id: String(++s.nextId), name: it.name, url: it.url, fileId: it.fileId || null, resource: it.resource, folder: it.folder || "", addedBy: s.user.email, addedAt: new Date(now()).toISOString() }); });
-          return ok({ added: (body.items || []).length });
-        }
-        if (body && body.action === "remove") { var rm = (body.rowIds || []).map(String), n2 = s.unsorted.length; s.unsorted = s.unsorted.filter(function (x) { return rm.indexOf(String(x.id)) === -1; }); return ok({ removed: n2 - s.unsorted.length }); }
-        return err(400, { error: "Unknown action" });
-      }
       if (path === "/api/place-cron") {
         var sugg = s.placements.review.map(function (r) { return r.file + " → " + r.model + " · " + r.resource; });
         if (/(^|&)dry=1(&|$)/.test(p.search.slice(1))) return ok({ ok: true, dryRun: true, at: new Date(now()).toISOString(), watched: Object.keys(s.folders).length, listed: Object.keys(s.folders).length, foldersFailed: 0, foldersSkippedForTime: 0, wouldSuggest: sugg.length, wouldSuggestCapped: 0, suggestions: sugg, pending: s.placements.pending.length, pendingFiles: [], alreadyRuledOut: { dismissed: s.placements.skip.length, noAuto: s.placements.noAuto.length } });
@@ -213,6 +213,7 @@
       if (path === "/api/aliases") {
         if (method === "GET") return ok({ aliases: s.aliases });
         if (body && body.action === "dismiss-miss") { var q = String(body.query || "").trim(); if (!q) return err(400, { error: "Missing query" }); var had = s.handledMisses.indexOf(q) !== -1; if (!had) s.handledMisses.push(q); return ok({ handled: true, added: !had, query: q }); }
+        if (body && body.action === "undismiss-miss") { var uq = String(body.query || "").trim(); if (!uq) return err(400, { error: "Nothing to undo." }); var uBefore = s.handledMisses.length; s.handledMisses = s.handledMisses.filter(function (x) { return x !== uq; }); return ok({ handled: false, removed: uBefore - s.handledMisses.length, query: uq }); }
         var from = String((body && body.from) || "").trim().toLowerCase(), to = String((body && body.to) || "").trim().toLowerCase();
         if (!from || !to) return err(400, { error: "Both words are needed." });
         var alias = { from: from, to: to };

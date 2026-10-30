@@ -186,9 +186,11 @@
   // The document title never changed (WCAG 2.4.2): every view, deep link and search shared "Grumbleton
   // Product Hub", so browser history entries, a row of open tabs, and a screen reader's page announcement
   // were all indistinguishable. Name what's on screen, most specific part first.
+  var _lbDocTitle = null; // the open preview's name, while one is open (F085)
   function setDocTitle(searchQuery) {
     var base = "Grumbleton & Sons Hub", lead = "";
-    if (searchQuery) lead = "Search: " + searchQuery;
+    if (_lbDocTitle) lead = _lbDocTitle;
+    else if (searchQuery) lead = "Search: " + searchQuery;
     else if (view === "progress") lead = "Progress";
     else if (view === "metrics") lead = "Metrics";
     else if (view === "admin") lead = "Admin";
@@ -203,7 +205,7 @@
       tabs[i].classList.toggle("on", on);
       tabs[i].setAttribute("aria-selected", on ? "true" : "false");
       tabs[i].tabIndex = on ? 0 : -1; // roving tabindex: only the selected tab is in the tab order
-      if (on) { var c = document.getElementById("content"); if (c) c.setAttribute("aria-labelledby", tabs[i].id); }
+      if (on && isPM()) { var c = document.getElementById("content"); if (c) { c.setAttribute("role", "tabpanel"); c.setAttribute("aria-labelledby", tabs[i].id); } } // a rep has no tabs, so no tab panel (F111)
     }
   }
 
@@ -278,11 +280,16 @@
   // Disable a button for the life of an async action and put it back EXACTLY as it was. Returns the restore
   // function; call it on both the success and the failure path (a button left dead after a failed save was
   // a real bug — T1-14 — because each site hand-rolled its own pair and one path forgot).
+  // A focused button that becomes disabled drops focus to <body>; when the action ends, focus goes back to the button
+  // (unless the user has moved it elsewhere meanwhile) — a keyboard PM was sent to the top of the page (F048).
   function busyButton(btn, label) {
     if (!btn) return function () {};
-    var html = btn.innerHTML, was = btn.disabled;
+    var html = btn.innerHTML, was = btn.disabled, hadFocus = document.activeElement === btn;
     btn.disabled = true; if (label != null) btn.textContent = label;
-    return function () { btn.disabled = was; btn.innerHTML = html; };
+    return function () {
+      btn.disabled = was; btn.innerHTML = html;
+      if (hadFocus && !was && btn.isConnected && (!document.activeElement || document.activeElement === document.body)) btn.focus();
+    };
   }
   // Generation guard for a panel that can be reloaded while an earlier load is still in flight: only the
   // NEWEST load may paint, or a slower earlier response clobbers the list with stale rows (T1-08).
@@ -364,6 +371,8 @@
     } else { openFams[k] = true; sel.fam = k; flashKey = k; } // the open family is part of the address (#/Cat/Fam, F104)
     pendingFocusKey = k; renderColumns(); syncHash();
   }
+  // What a red "Link issue" means, on every device: a hover title never shows on touch or to the keyboard (F108).
+  function brokenNote() { return window.PF_isPM ? "Didn’t open at the last check — see To do on Progress." : "Didn’t open at the last check — the product team has been told."; }
   function selectProduct(k) { sel.prod = k; sel.model = null; openFams[famOfKey(k)] = true; flashKey = k; pendingFocusKey = k; mobileRevealPending = true; renderColumns(); syncHash(); }
   function selectModel(k) { sel.model = k; flashKey = k; pendingFocusKey = k; mobileRevealPending = true; renderColumns(); syncHash(); announceModelPick(k); }
   // A model pick keeps focus on the model button (right), but nothing told a screen reader that the product
@@ -372,7 +381,7 @@
     if (!srAnnounce) return;
     var m = String(k).split("§").pop(), shared = !!document.querySelector(".col-product"); // k is the tree key (Category§Family§Product§Model); counts and copy want the bare model name
     srAnnounce.textContent = m + " selected: " + usableCount(m) + " of " + applicableCount(m) + " files in the Hub. " +
-      (shared ? "Documents every model shares come first, then only what differs for this model." : "Its documents follow the model list.");
+      (shared ? "Files every model shares come first, then only what’s different for this model." : "Its files follow the model list.");
   }
   // Return to the top-level Find home (nothing selected) — where "Your Favorites" lives.
   // The ONE programmatic way out of a search. Every path that leaves it — Home, a result click, a tab, a
@@ -463,7 +472,14 @@
                 '<span class="ci-name">' + escapeHtml(p.name) + '</span>' +
                 '<span class="ci-meta">' + (pc ? dot(productLive(p)) + p.models.length : '<span class="soon-tag">Not in the Hub yet</span>') + '</span>' +
                 '<span class="ci-chev">' + CHEV + '</span>';
-              prod.addEventListener("click", function () { selectProduct(pk); });
+              prod.addEventListener("click", function (e) {
+                selectProduct(pk);
+                if (e.detail !== 0) return;
+                // By keyboard the Models column is a long way off in tab order, and nothing said it had appeared (F067).
+                var firstModel = document.querySelector(".col-models button.col-item");
+                if (firstModel) firstModel.focus();
+                if (srAnnounce && prodByKey(pk)) { var nm = prodByKey(pk).p.models.length; srAnnounce.textContent = prodByKey(pk).p.name + ": " + nm + " model" + (nm === 1 ? "" : "s") + "."; }
+              });
               nest.appendChild(prod);
             });
           }
@@ -752,7 +768,7 @@
     var hasShared = curSplit.modelCount > 1 && Object.keys(curSplit.shared).length > 0;
     var stack = document.createElement("div"); stack.className = "col-stack"; stack.setAttribute("data-anim", "rstack:" + sel.prod);
     if (hasShared) {
-      var sub = '<span class="col-sub">Documents every ' + escapeHtml(pb.p.name) + ' model shares · ' + pb.p.models.length + ' models</span>';
+      var sub = '<span class="col-sub">Files every ' + escapeHtml(pb.p.name) + ' model shares · ' + pb.p.models.length + ' models</span>';
       var pcol = column("col-res col-product", '<span class="lead-name">' + escapeHtml(pb.p.name) + '</span>' + sub, "col-lead");
       pcol.setAttribute("data-anim", "pcol:" + sel.prod);
       // column() puts role=heading on the whole header, so its name would include the subtitle; move it to
@@ -764,7 +780,7 @@
     }
     if (sel.model) {
       var p = sel.model.split("§"), m = p[p.length - 1];
-      var tag = hasShared ? '<span class="col-tag">Only what differs for this model</span>' : '';
+      var tag = hasShared ? '<span class="col-tag">Only what’s different for this model</span>' : '';
       // Tag + name share one stacked wrapper: buildResources makes the header a flex row (name | actions), and
       // a bare tag span would otherwise sit BESIDE the name instead of above it.
       var col = column("col-res col-model", '<span class="col-titles">' + tag + '<span class="lead-name">' + escapeHtml(m) + decodeSuffixHtml(m) + '</span></span>', "col-lead mono"); col.setAttribute("data-anim", "rcol:" + sel.model);
@@ -796,7 +812,7 @@
       var owner = sel.model ? sel.model.split("§").pop() : firstHolder(pb, r.name, arr[0]);
       var hs = healthStatusForFiles(owner, r.name, arr); // only a broken SHARED file flags this card (F022)
       var icon = '<span class="res-icon">' + svg(ICONS[r.icon]) + '</span>';
-      var bodyHtml = '<span class="res-body"><span class="res-name">' + r.name + '</span><span class="res-desc">' + r.desc + '</span></span>';
+      var bodyHtml = '<span class="res-body"><span class="res-name">' + r.name + '</span><span class="res-desc">' + (hs === "broken" ? brokenNote() : r.desc) + '</span></span>';
       var el = document.createElement("a"); el.href = arr[0].url; el.target = "_blank"; el.rel = "noopener";
       el.className = "res" + (hs === "broken" ? " res-broken" : "");
       el.setAttribute("data-res", r.name);
@@ -962,7 +978,7 @@
   function recentGet() { try { var a = JSON.parse(localStorage.getItem("pf-recent") || "[]"); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
   function recentPush(m) { if (!m) return; var a = recentGet().filter(function (x) { return x !== m; }); a.unshift(m); try { localStorage.setItem("pf-recent", JSON.stringify(a.slice(0, 12))); } catch (e) {} }
   function recentRemove(m) { var a = recentGet().filter(function (x) { return x !== m; }); try { localStorage.setItem("pf-recent", JSON.stringify(a)); } catch (e) {} }
-  // "Recently viewed" strip — automatic history chips, shown on every Find view. Excludes favorited models
+  // "Recently viewed" strip — automatic history chips, on the home view only (above the columns it dropped them about 63 px right after a click, F043). Excludes favorited models
   // (they show under Your Favorites) and any no longer in the catalog. Each chip has a hover × to remove it.
   function recentlyViewedStrip() {
     var pinned = {}; favGet().forEach(function (m) { pinned[m] = 1; });
@@ -997,10 +1013,11 @@
   var _visitBaseline = null;
   function visitBaseline() {
     if (_visitBaseline !== null) return _visitBaseline;
-    var raw = null; try { raw = localStorage.getItem("pf-lastvisit"); } catch (e) {}
-    var now = Date.now(), prev = raw ? parseInt(raw, 10) : NaN;
-    _visitBaseline = isNaN(prev) ? now : prev;         // first visit → now (badge nothing); else the prior visit
-    try { localStorage.setItem("pf-lastvisit", String(now)); } catch (e) {} // advance once per load for next time
+    var raw = null, seen = null; try { raw = localStorage.getItem("pf-lastvisit"); seen = localStorage.getItem("pf-lastvisit-seen"); } catch (e) {}
+    // A visit is a session (decision 11a, F107): a reload or the version-nudge Refresh keeps the badges; about 8 hours away starts a new visit.
+    var step = window.PF.visitStep(raw, seen, Date.now());
+    _visitBaseline = step.baseline;
+    try { localStorage.setItem("pf-lastvisit", String(step.baseline)); localStorage.setItem("pf-lastvisit-seen", String(step.seen)); } catch (e) {}
     return _visitBaseline;
   }
   function STARICON(filled) {
@@ -1049,7 +1066,7 @@
     // Pin sits inline in the column header (same row as the model name); fall back to an in-panel row if no header given.
     // A "Copy links" share-pack button sits just left of the pin (skipped when the model has no openable resources).
     var mpack = modelSharePack(m);
-    // Read at click time: in select mode the pack is only the picked resources ("Copy selected links (N)").
+    // Read at click time: in select mode the pack is only the picked resources ("Internal — copy selected links (N)").
     function packNow() {
       var p = modelSharePack(m);
       if (modelSel.isOn()) { p.resources = selectedPackResources(m, p.resources); p.count = p.resources.length; p.empty = !p.count; }
@@ -1134,12 +1151,13 @@
         if (on) { row.setAttribute("role", "checkbox"); row.setAttribute("aria-checked", p ? "true" : "false"); }
         else { row.removeAttribute("role"); row.removeAttribute("aria-checked"); }
       });
-      if (shareModelBtn) { shareModelBtn.innerHTML = PACKICON + '<span>' + escapeHtml(window.PF.selectionLabel("Internal — copy Hub links", "Copy selected links", modelSel)) + '</span>'; shareModelBtn.disabled = on && !n; }
+      if (shareModelBtn) { shareModelBtn.innerHTML = PACKICON + '<span>' + escapeHtml(window.PF.selectionLabel("Internal — copy Hub links", "Internal — copy selected links", modelSel)) + '</span>'; shareModelBtn.disabled = on && !n; }
       if (shareCustBtn) setModelShareBusy(shareCustBtn, false);
+      if (shareMenu && shareMenu.dlBtn) setModelShareBusy(shareMenu.dlBtn, false);
       if (shareMenu) { shareMenu.btn.innerHTML = SHAREICON + '<span>' + escapeHtml(window.PF.selectionLabel("Share", "Share selected", modelSel)) + '</span>' + LB_CARET; shareMenu.btn.disabled = on && !n; }
     }
     selbar.querySelector(".res-sel-all").addEventListener("click", function () { modelSel.all(selKeys); paintModelSel(); });
-    selbar.querySelector(".res-sel-clear").addEventListener("click", function () { modelSel.clear(); paintModelSel(); });
+    selbar.querySelector(".res-sel-clear").addEventListener("click", function () { modelSel.clear(); paintModelSel(); selbar.querySelector(".res-sel-all").focus(); }); // Clear hides itself: focus to its neighbour, not <body> (F052)
     var list = document.createElement("div"); list.className = "res-list";
     RESOURCE_TYPES.forEach(function (r) {
       if (naFor(m, r.name)) return; // resource type not applicable to this model — don't show it
@@ -1180,7 +1198,7 @@
         var brokenTip = window.PF_isPM
           ? "This didn’t open when links were last checked" + healthWhen() + " — the file may be moved, deleted, or restricted. Re-run the link check from the To Do box on the Progress tab."
           : "This didn’t open when links were last checked" + healthWhen() + " — the file may be moved, deleted, or you may not have access. The product team has been notified; you can also report it with the bug icon at the top of the page."; // plain text: a title attribute renders markup literally
-        el.innerHTML = icon + body + '</span><span class="pill bad" title="' + escapeAttr(brokenTip) + '">' + svg(ICONS.alert) + ' Link issue</span>';
+        el.innerHTML = icon + '<span class="res-body"><span class="res-name">' + r.name + '</span><span class="res-desc">' + brokenNote() + '</span></span><span class="pill bad" title="' + escapeAttr(brokenTip) + '">' + svg(ICONS.alert) + ' Link issue</span>';
         var title = m + " · " + r.name;
         el.addEventListener("click", function (e) { resourceClick(e, arr, title, m); });
         list.appendChild(el);
@@ -1350,6 +1368,13 @@
     var tbEl = document.querySelector(".topbar");
     var h = tbEl ? Math.ceil(tbEl.getBoundingClientRect().height) : 0;
     if (h) document.documentElement.style.setProperty("--topbar-h", h + "px");
+    // How much of the bar a collapsed header keeps: down to the brand row's bottom padding (F042). The rows no longer
+    // change height when they hide, so this holds in either state.
+    var br = tbEl && tbEl.querySelector(".brand"), inner = tbEl && tbEl.querySelector(".topbar-inner");
+    if (br && br.getClientRects().length) {
+      var row1 = br.getBoundingClientRect().bottom - tbEl.getBoundingClientRect().top + (parseFloat(getComputedStyle(inner).paddingBottom) || 0);
+      document.documentElement.style.setProperty("--hdr-row1", Math.ceil(row1) + "px");
+    }
     return h;
   }
   window.addEventListener("resize", function () { syncTopbarHeight(); });
@@ -1371,7 +1396,7 @@
     // "Your Favorites" shows on EVERY Find view (home or drilled into a product/model), so a pinned model
     // is always one click away — previously it only rendered on the cleared home view, so pins looked lost.
     var favs = favoritesStrip(); if (favs) content.appendChild(favs);
-    var recent = recentlyViewedStrip(); if (recent) content.appendChild(recent); // shown on every Find view
+    if (!sel.prod) { var recent = recentlyViewedStrip(); if (recent) content.appendChild(recent); }
     // "What's New" is a home-view welcome strip; once you've drilled into a product, hide it so you're not
     // scrolling past it every time to reach the tree. (Other Collateral is a real category — it stays.)
     if (!sel.prod) { var strip = availableStrip(); if (strip) content.appendChild(strip); }
@@ -1445,8 +1470,12 @@
       var tbH = syncTopbarHeight();
       anchorCol.style.scrollMarginTop = (tbH + 12) + "px";
       anchorCol.scrollIntoView({ block: "start", behavior: RM.matches ? "auto" : "smooth" });
-    } else if (!tourState && !_keepScroll && !stackedMobile && deeper && cols.lastChild && cols.lastChild.scrollIntoView) {
-      cols.lastChild.scrollIntoView({ inline: "end", block: "nearest", behavior: RM.matches ? "auto" : "smooth" });
+    } else if (!tourState && !_keepScroll && !stackedMobile && deeper && cols.lastChild) {
+      // Reveal the new column SIDEWAYS only. scrollIntoView({ block: "nearest" }) also scrolled the page down, because
+      // the column stack is taller than the window: a model link landed with the heading under the top bar (F065).
+      var sx = cols;
+      while (sx && sx !== document.body && !(sx.scrollWidth > sx.clientWidth + 1)) sx = sx.parentElement;
+      if (sx && sx !== document.body) sx.scrollTo({ left: sx.scrollWidth, behavior: RM.matches ? "auto" : "smooth" });
     }
     mobileRevealPending = false;
     lastColDepth = newDepth;
@@ -1523,77 +1552,8 @@
   }
 
   /* ============================================================
-     PM · WIRE TOOL (Add files) & MANAGE-DOCUMENT PANEL
+     PM · MANAGE-DOCUMENT PANEL & FILE IDENTITY
      ============================================================ */
-  // ---- Progress tool: wire a SharePoint folder to a product's resource, with a preview ----
-  // NOT on the page since 2026-10-07 (owner decision: one folder-linking method, productFolderPanel). Kept, with its
-  // bucket board and the family matcher, until the Product Management migration is through; then delete.
-  function wirePanel(bare) {
-    var box = document.createElement("div"); box.className = "wire";
-    box.innerHTML =
-      (bare ? '' : '<div class="wire-head" role="heading" aria-level="2">' + svg(ICONS.sync) + '<span>Link a folder</span></div>') +
-      '<p class="wire-lead">Pick a SharePoint <b>folder</b> and sort its files onto this product’s models. New files added to the folder later are suggested in <b>To Do › New on SharePoint</b> for you to approve.</p>' +
-      '<p class="wire-steps">Choose the product&nbsp;→&nbsp;choose the resource type&nbsp;→&nbsp;paste the folder link&nbsp;→&nbsp;Preview, then Approve.</p>' +
-      '<div class="wire-form">' +
-        '<select class="wire-sel" id="wireProduct" aria-label="Product"></select>' +
-        '<select class="wire-sel" id="wireResource" aria-label="Resource type"></select>' +
-        '<input class="wire-input" id="wireUrl" type="url" aria-label="SharePoint folder link" placeholder="Paste the SharePoint folder link">' +
-        '<button class="wire-btn" id="wirePreview" type="button">Preview</button>' +
-      '</div>' +
-      '<details class="wire-help">' +
-        '<summary>How do I get the folder link?</summary>' +
-        '<div class="wire-help-body">' +
-          '<ol class="wire-help-steps">' +
-            '<li>In SharePoint, open the <b>folder</b> that holds the files — not a single file.</li>' +
-            '<li>Click <b>Copy link</b> at the top of the folder <em>(not <b>Share</b>)</em>.</li>' +
-            '<li><b>Check who can open it.</b> If the link says <em>“Specific people”</em>, click that and choose <b>“People in Grumbleton USA”</b> — otherwise the site (and your colleagues) can’t open the files and they’ll show up as a <b>Link issue</b>.</li>' +
-            '<li>Paste it into the box above and hit <b>Preview</b>.</li>' +
-          '</ol>' +
-          '<img class="wire-help-img" src="img/copy-link-help.png" loading="lazy" decoding="async" alt="In SharePoint, open the folder and click Copy link at the top">' +
-        '</div>' +
-      '</details>' +
-      '<details class="wire-allfam">' +
-        '<summary>' + svg(ICONS.sync) + ' One folder for every family (e.g. spec sheets / trainings)</summary>' +
-        '<div class="wire-allfam-body">' +
-          '<p class="wire-help-note">Have one folder with a single file per family (named to start with the family name)? Match them all at once — each file goes to <b>every model</b> in its family, across products. You’ll confirm the matches before anything saves.</p>' +
-          '<div class="wire-form">' +
-            '<select class="wire-sel" id="wireFamResource" aria-label="Resource type"></select>' +
-            '<input class="wire-input" id="wireFamUrl" type="url" aria-label="Folder link" placeholder="Paste the folder link (one file per family)">' +
-            '<button class="wire-btn" id="wireFamMatch" type="button">Match to families</button>' +
-          '</div>' +
-          '<div id="wireFamResult"></div>' +
-        '</div>' +
-      '</details>' +
-      '<div class="wire-result" id="wireResult"></div>';
-    var helpImg = box.querySelector(".wire-help-img");
-    if (helpImg) helpImg.addEventListener("error", function () { this.style.display = "none"; });
-    var prodSel = box.querySelector("#wireProduct");
-    prodSel.innerHTML = '<option value="">Choose a product…</option>';
-    CATALOG.forEach(function (c) {
-      c.families.forEach(function (f) {
-        f.products.forEach(function (p) {
-          var o = document.createElement("option");
-          o.value = c.name + "§" + f.name + "§" + p.name;
-          o.textContent = f.name + " › " + p.name;
-          prodSel.appendChild(o);
-        });
-      });
-    });
-    var resSel = box.querySelector("#wireResource");
-    // Forced choice: without a placeholder the select silently defaults to the first type ("Spec Sheet"),
-    // so a PM wiring renders who doesn't touch this dropdown would save them into the wrong resource slot.
-    resSel.innerHTML = '<option value="">Choose a resource type…</option>';
-    RESOURCE_TYPES.forEach(function (r) { var o = document.createElement("option"); o.value = r.name; o.textContent = r.name; resSel.appendChild(o); });
-    box.querySelector("#wirePreview").addEventListener("click", function () { wirePreview(box); });
-    // Enter submits, like #docPlaceUrl already does. Pasting a link and pressing Enter did nothing here.
-    box.querySelector("#wireUrl").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); wirePreview(box); } });
-    var famResSel = box.querySelector("#wireFamResource");
-    famResSel.innerHTML = '<option value="">Choose a resource type…</option>';
-    RESOURCE_TYPES.forEach(function (r) { var o = document.createElement("option"); o.value = r.name; o.textContent = r.name; famResSel.appendChild(o); });
-    box.querySelector("#wireFamMatch").addEventListener("click", function () { wireFamMatch(box); });
-    box.querySelector("#wireFamUrl").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); wireFamMatch(box); } });
-    return box;
-  }
   // ---- Progress tool: place ONE file across many products/models (opens the Manage Document panel) ----
   function docPlacePanel(bare) {
     var box = document.createElement("div"); box.className = "wire";
@@ -1621,149 +1581,9 @@
     box.querySelector("#docPlaceUrl").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); go(); } });
     return box;
   }
-  function wirePreview(box) {
-    var pvBtn = box.querySelector("#wirePreview");
-    if (pvBtn.disabled) return; // a run is in flight — Enter must not start a second one (F036)
-    var prodVal = box.querySelector("#wireProduct").value;
-    var resource = box.querySelector("#wireResource").value;
-    var url = box.querySelector("#wireUrl").value.trim();
-    var result = box.querySelector("#wireResult");
-    if (!prodVal || !resource || !url) { result.innerHTML = '<div class="wire-msg">Pick a product, choose a resource type, and paste a folder link first.</div>'; return; }
-    var parts = prodVal.split("§"), fam = parts[1], prod = parts[2], models = [];
-    CATALOG.forEach(function (c) { if (c.name !== parts[0]) return; c.families.forEach(function (f) { if (f.name !== fam) return; f.products.forEach(function (p) { if (p.name === prod) models = p.models; }); }); });
-    if (!models.length) { result.innerHTML = '<div class="wire-msg">That product has no models in the sheet yet.</div>'; return; }
-    result.innerHTML = '<div class="wire-msg">Opening the folder &amp; checking what’s already linked…</div>';
-    if (!window.PF_getToken) { result.innerHTML = '<div class="wire-msg err">Please sign in again.</div>'; return; }
-    var pvDone = busyButton(pvBtn, "Opening…"); // disable during the fetch — no double-submit
-    window.PF_getToken().then(function (token) {
-      var bearer = "Bearer " + token;
-      return fetchFolderChildren(url, bearer).then(function (files) {
-        // Also resolve each model's already-wired files (to their identities) so we can MERGE + DE-DUPE.
-        return Promise.all(models.map(function (m) {
-          return wireLoadExisting(m, resource, bearer).then(function (ex) { return { model: m, ex: ex }; })
-            // error:true marks "we couldn't read this model's current links" — distinct from "genuinely empty".
-            // On Approve we must NEVER clear a model whose existing state we failed to load (was silently erasing links).
-            .catch(function () { return { model: m, ex: { files: [], hasFolder: false, folderUrl: "", error: true } }; });
-        })).then(function (exList) {
-          var existing = {}; exList.forEach(function (e) { existing[e.model] = e.ex; });
-          renderWirePreview(box, { fam: fam, prod: prod, resource: resource, url: url, models: models, files: files, existing: existing });
-        });
-      });
-    }).catch(function (err) { result.innerHTML = '<div class="wire-msg err">Couldn’t open that as a folder (' + pmErr(err) + '). Make sure it’s a <b>folder</b> link (not a single file) — use <b>Copy link</b> on the folder in SharePoint. See “How do I get the folder link?” above.</div>'; })
-      .then(function () { pvDone(); });
-  }
-  // ---- "One folder for every family" — spec-sheet / training bulk wire ----
-  // Every family (name -> its products+models across the catalog), for matching + fan-out.
-  function wireAllFamilies() {
-    var out = [], byName = {};
-    CATALOG.forEach(function (c) { c.families.forEach(function (f) {
-      if (!byName[f.name]) { byName[f.name] = { name: f.name, prods: [] }; out.push(byName[f.name]); }
-      f.products.forEach(function (p) { if (p.models && p.models.length) byName[f.name].prods.push({ prod: p.name, models: p.models }); });
-    }); });
-    return out.filter(function (fam) { return fam.prods.length; });
-  }
-  // Match a filename to a family: normalized name STARTS WITH the family name (longest wins); else CONTAINS.
-  function wireMatchFamily(filename, fams) {
-    var nf = normModel(filename), best = null, bestLen = 0;
-    fams.forEach(function (fam) { var nfam = normModel(fam.name); if (nfam && nf.indexOf(nfam) === 0 && nfam.length > bestLen) { best = fam.name; bestLen = nfam.length; } });
-    if (best) return best;
-    // The starts-with pass above is safe at any length. This CONTAINS fallback is not: a 2-3 character
-    // family name appears inside all sorts of filenames by coincidence, which would file a render under
-    // the wrong family. Require a substantial name before trusting a mid-string hit.
-    fams.forEach(function (fam) { var nfam = normModel(fam.name); if (nfam && nfam.length >= 4 && nf.indexOf(nfam) !== -1 && nfam.length > bestLen) { best = fam.name; bestLen = nfam.length; } });
-    return best;
-  }
-  // Open the folder, auto-match each file to a family, and render a confirm-the-matches list.
-  function wireFamMatch(box) {
-    var mbBtn = box.querySelector("#wireFamMatch");
-    if (mbBtn.disabled) return; // a run is in flight (F036)
-    var resource = box.querySelector("#wireFamResource").value;
-    var url = box.querySelector("#wireFamUrl").value.trim();
-    var res = box.querySelector("#wireFamResult");
-    if (!resource || !url) { res.innerHTML = '<div class="wire-msg">Choose a resource type and paste a folder link first.</div>'; return; }
-    if (!window.PF_getToken) { res.innerHTML = '<div class="wire-msg err">Please sign in again.</div>'; return; }
-    res.innerHTML = '<div class="wire-msg">Opening the folder…</div>';
-    var mbDone = busyButton(mbBtn, "Opening…"); // disable during the fetch — no double-submit
-    window.PF_getToken().then(function (token) { return fetchFolderChildren(url, "Bearer " + token); }).then(function (files) {
-      if (!files.length) { res.innerHTML = '<div class="wire-msg">That folder has no files.</div>'; return; }
-      var fams = wireAllFamilies();
-      var m0 = files.map(function (f) { return wireMatchFamily(f.name, fams); });
-      var opts = '<option value="">(skip)</option>' + fams.map(function (f) { return '<option value="' + escapeAttr(f.name) + '">' + escapeHtml(f.name) + '</option>'; }).join("");
-      var rows = files.map(function (f, i) {
-        return '<div class="wire-fam-row"><span class="wire-fam-file' + (m0[i] ? '' : ' unmatched') + '" title="' + escapeAttr(f.name) + '">' + escapeHtml(f.name) + '</span>' +
-          '<select class="wire-sel wire-fam-sel" data-i="' + i + '" aria-label="Family for ' + escapeAttr(f.name) + '">' + opts + '</select></div>';
-      }).join("");
-      var matched = m0.filter(Boolean).length;
-      res.innerHTML = '<div class="wire-summary">Auto-matched <b>' + matched + ' of ' + files.length + '</b> files to a family by name — <b>check and fix any</b>, then save. Each file goes to <b>every model</b> in the chosen family; “(skip)” files are ignored.</div>' +
-        '<div class="wire-fam-list">' + rows + '</div>' +
-        '<div class="wire-approve"><button class="wire-btn primary" id="wireFamSave" type="button">Link to all families &amp; save</button></div>';
-      [].forEach.call(res.querySelectorAll(".wire-fam-sel"), function (s) { var i = +s.getAttribute("data-i"); if (m0[i]) s.value = m0[i]; });
-      res.querySelector("#wireFamSave").addEventListener("click", function () {
-        var matches = [];
-        [].forEach.call(res.querySelectorAll(".wire-fam-sel"), function (s) { var i = +s.getAttribute("data-i"); if (s.value) matches.push({ file: files[i], family: s.value }); });
-        if (!matches.length) { showToast('<span>Pick a family for at least one file.</span>'); return; }
-        wireFamSave(box, matches, resource, url, this);
-      });
-    }).catch(function (err) { res.innerHTML = '<div class="wire-msg err">Couldn’t open that as a folder (' + pmErr(err) + '). Make sure it’s a <b>folder</b> link.</div>'; })
-      .then(function () { mbDone(); });
-  }
-  // Fan each matched file out to EVERY model in its family and save — reusing the data-loss-safe
-  // wireApprove path (reads each model's current links, MERGES, skips any it couldn't read).
-  function wireFamSave(box, matches, resource, url, btn) {
-    var fams = wireAllFamilies(), famMap = {}; fams.forEach(function (f) { famMap[f.name] = f; });
-    var raw = []; // {fam, prod, model, file}
-    matches.forEach(function (m) { var fam = famMap[m.family]; if (!fam) return; fam.prods.forEach(function (pp) { pp.models.forEach(function (model) { raw.push({ fam: m.family, prod: pp.prod, model: model, file: m.file }); }); }); });
-    if (!raw.length) { showToast('<span>Nothing matched.</span>'); return; }
-    // Confirm the blast radius before the widest write in the app (one file → every model in each family,
-    // across products). It's all additions (nothing removed), but the PM should see the scope first.
-    var uModels = {}, uProds = {}; raw.forEach(function (t) { uModels[t.fam + "§" + t.prod + "§" + t.model] = 1; uProds[t.fam + "§" + t.prod] = 1; });
-    var nM = Object.keys(uModels).length, nP = Object.keys(uProds).length, nF = matches.length;
-    pfConfirm({
-      title: "Link to every model in these families?",
-      body: ["Add " + nF + " file" + (nF === 1 ? "" : "s") + " as the " + resource + " for " + nM + " model" + (nM === 1 ? "" : "s") + " across " + nP + " product group" + (nP === 1 ? "" : "s") + ".",
-             "Nothing is removed — this only adds."],
-      confirmLabel: "Save"
-    }).then(function (ok) {
-    if (!ok) return;
-    if (!window.PF_getToken) { showError('<span>Please sign in again.</span>'); return; }
-    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
-    // Plan from the sheet as it is NOW, not this tab's copy (which can be hours old): this is the widest write
-    // in the app and, being multi-product, sends no compare-and-swap base — so a stale copy silently dropped a
-    // link another PM had added since (F186).
-    return loadCatalog({ fresh: true }).then(function () { return window.PF_getToken(); }).then(function (token) {
-      var bearer = "Bearer " + token;
-      var uniq = {}; raw.forEach(function (t) { if (!uniq[t.model]) uniq[t.model] = t; });
-      var items = Object.keys(uniq).map(function (k) { return uniq[k]; });
-      // Resolve each model's current links (from the catalog just re-read) to file identities, so the merge
-      // de-dupes and can't drop anything.
-      return lhRunPool(items, function (it) {
-        return wireLoadExisting(it.model, resource, bearer).then(function (ex) { return { model: it.model, ex: ex }; },
-          function () { return { model: it.model, ex: { files: [], hasFolder: false, folderUrl: "", error: true } }; });
-      }, 5).then(function (loaded) {
-        var existing = {}; loaded.forEach(function (r) { existing[r.model] = r.ex; });
-        var targets = [], assign = { __none: [] }, seen = {};
-        raw.forEach(function (t) {
-          var key = wireKey(t.fam, t.prod, t.model);
-          if (!seen[key]) {
-            seen[key] = 1; targets.push({ key: key, fam: t.fam, prod: t.prod, model: t.model, own: false }); assign[key] = [];
-            var ex = existing[t.model] || { files: [], hasFolder: false, folderUrl: "" };
-            wireFolderChips(ex).forEach(function (c) { assign[key].push(c); });
-            (ex.files || []).forEach(function (f) { assign[key].push(wireInst(f, true)); });
-          }
-          var ident = wireIdent(t.file);
-          if (!assign[key].some(function (i) { return wireIdent(i) === ident; })) assign[key].push(wireInst(t.file, false));
-        });
-        wireApprove({ resource: resource, url: url, targets: targets, assign: assign, existing: existing }, btn || box.querySelector("#wireFamMatch"));
-      });
-    }).catch(function (err) { if (btn) { btn.disabled = false; btn.textContent = "Link to all families & save"; } showError('<span>Couldn’t prepare that (' + pmErr(err) + ').</span>', 7000); });
-    });
-  }
-  var wireDrag = null, wireIid = 0; // id of the instance being dragged; instance-id counter
-  var wireMenu = null; // the one open custom Move dropdown, if any
   var DUPICON = svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>');
   var TICKICON = svg('<path d="M20 6 9 17l-5-5"/>'); // select-mode ticks (gallery tiles, model rows) and the Select toggles
   var DELICON = svg('<path d="M18 6 6 18M6 6l12 12"/>');
-  var MOVEICON = svg('<path d="M5 9 2 12l3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/><path d="M2 12h20M12 2v20"/>'); // 4-way move arrows
   // --- File identity (so the SAME file wired via two different SharePoint links de-dupes) ---
   function wireNormUrl(u) { return window.PF.canonFileUrl(u); } // the shared identity — keeps an Office link's ?sourcedoc, drops "Copy link" junk
   function wireIdent(f) { return (f && f.fileId) ? ("id:" + f.fileId) : ("u:" + wireNormUrl(f && f.url)); }
@@ -1784,7 +1604,7 @@
       .then(function (item) {
         var ts = (item.thumbnails && item.thumbnails[0]) || {};
         // 48×36 wire tiles / 40px doc chips: `small` (96px) covers them at 2×. See PF.pickThumb.
-        return { name: item.name, url: url, thumb: window.PF.pickThumb(ts, 96), isImage: isImageFile(item.name, (item.file && item.file.mimeType) || ""), fileId: item.id || null };
+        return { name: item.name, url: url, webUrl: item.webUrl || null, thumb: window.PF.pickThumb(ts, 96), isImage: isImageFile(item.name, (item.file && item.file.mimeType) || ""), fileId: item.id || null };
       });
     // Memo the PROMISE, so concurrent callers in the same pool share one request. A rejection is dropped
     // from the memo so a transient Graph failure isn't cached as a permanent one.
@@ -1803,17 +1623,6 @@
         .catch(function () { files.push({ name: (lnk.label || "linked file"), url: lnk.url, thumb: null, isImage: false, fileId: null }); });
     });
     return Promise.all(jobs).then(function () { return { files: files, hasFolder: hasFolder, folderUrl: folderUrl, folderUrls: folderUrls }; });
-  }
-  // One locked "auto-updating folder" chip per folder link the model holds.
-  function wireFolderChips(ex) {
-    var list = (ex && ex.folderUrls && ex.folderUrls.length) ? ex.folderUrls : ((ex && ex.hasFolder && ex.folderUrl) ? [ex.folderUrl] : []);
-    return list.map(function (u) { return wireInst({ name: "Current folder — auto-updating", url: u, folder: true }, true); });
-  }
-  // A model's current links as the sheet holds them — every folder, then every file. The compare-and-swap
-  // base and the removal count must both cover all of them.
-  function wireExistingUrls(ex) {
-    var folders = (ex && ex.folderUrls && ex.folderUrls.length) ? ex.folderUrls : ((ex && ex.hasFolder && ex.folderUrl) ? [ex.folderUrl] : []);
-    return folders.concat(((ex && ex.files) || []).map(function (f) { return f.url; }));
   }
   // Resolve a pasted SharePoint URL to its canonical driveItem webUrl + stable id, so what we STORE is
   // identity-stable no matter which "Copy link" form was pasted. NEVER blocks a save: any failure (offline
@@ -1838,7 +1647,7 @@
       return wireResolveItem(startUrl, bearer)
         .catch(function () { return { name: null, url: startUrl, thumb: null, isImage: false, fileId: null }; })
         .then(function (self) {
-          var doc = { url: self.url, id: self.fileId, name: self.name, thumb: self.thumb, type: resource };
+          var doc = { url: self.webUrl || self.url, id: self.fileId, /* the canonical address, like every other add path (F006) */ name: self.name, thumb: self.thumb, type: resource };
           var byUrl = {}; // distinct file url -> [models that link it under this resource]
           Object.keys(LINKS).forEach(function (k) {
             var parts = k.split("::");
@@ -2128,6 +1937,7 @@
         if (docState !== st) return; // closed, or reopened for a different file, while resolving
         if (item.folder) { okDone(); showError('<span>That’s a folder link — paste the link to the newer file itself.</span>'); return; }
         var n = { url: item.webUrl || url, id: item.id || null };
+        if (oldSiteMsg(n.url)) { okDone(); showError('<span>' + oldSiteMsg(n.url) + '</span>'); return; } // F089
         // Refuse the file as its own replacement: it looks like a harmless no-op but rewrites every
         // placement of the document.
         if (window.PF.sameFile({ url: n.url, id: n.id }, { url: st.doc && st.doc.url, id: st.doc && st.doc.id })) {
@@ -2187,17 +1997,20 @@
     // the per-user rate limit on a company-wide file (F039/F092). A model already in its wanted state is not
     // re-sent, so after a partial failure "Approve again" — re-planned from a fresh read — sends only what's
     // left, and its base is current.
-    var done = 0;
+    var done = 0, undoSaved = [];
     groups.reduce(function (chain, g) {
       return chain.then(function () {
+        var rec = undoRecord(g.fam, g.prod, g.resource, g.assignments, g.base);
         return postWire(g.fam, g.prod, g.resource, g.assignments, { expectRemoved: g.expectRemoved, expectRemovedByModel: g.expectRemovedByModel, base: g.base }).then(function () {
+          undoSaved.push(rec);
           Object.keys(g.finalByKey).forEach(function (key) { setLinks(key, g.finalByKey[key]); clearHealthFor(key); });
           done++; st.savedN = done;
         });
       });
     }, Promise.resolve()).then(function () {
       st.saving = false; docLockBody(false);
-      toastSaved('Document updated.');
+      if (hasRemoval) removeUndoToast('Document updated.', undoSaved, repaintProgressSafely);
+      else toastSaved('Document updated.');
       refreshCovStats();
       repaintProgressSafely(); // not a full re-render: the section editor this panel was opened from may hold staged edits (F027)
       // Only close the panel this save belongs to: Cancel/Escape stay live while it saves, and the PM may
@@ -2210,553 +2023,23 @@
       refreshCovStats();
       var lead = done ? 'Saved ' + done + ' of ' + groups.length + ' products, then c' : 'C';
       var conflict = isConflict(err);
+      if (err && err.code === "session_expired") { // the sticky prompt says what to do; a re-read would fail the same way (F061)
+        if (done) showError('<span>' + lead + 'ouldn’t finish saving (' + pmErr(err) + ').</span>', 9000);
+        repaintProgressSafely();
+        return;
+      }
       if (!conflict) showError('<span>' + lead + 'ouldn’t finish saving (' + pmErr(err) + '). Click “Approve &amp; save” again to finish the rest.</span>', 9000);
-      loadCatalog({ fresh: true }).then(function (ok) {
+      loadCatalog({ fresh: true, reportsFailure: conflict }).then(function (ok) {
         if (conflict) conflictToast(ok, lead + 'ouldn’t save the rest: another PM changed some of these links meanwhile. The panel now has the current links — click “Approve &amp; save” again.', lead + 'ouldn’t save the rest: another PM changed some of these links meanwhile.');
         refreshCovStats(); repaintProgressSafely();
       });
     });
     });
   }
-  // A self-contained bucket instance (carries its own url/thumb/id so existing files render without the folder listing).
-  function wireInst(f, existing) {
-    return { id: ++wireIid, name: f.name, url: f.url, thumb: f.thumb || null, isImage: !!f.isImage, fileId: (f.fileId != null ? f.fileId : null), existing: !!existing, folder: !!f.folder };
-  }
-  function wireFindInst(ctx, id) {
-    var found = null;
-    Object.keys(ctx.assign).forEach(function (mk) { ctx.assign[mk].forEach(function (x) { if (String(x.id) === String(id)) found = x; }); });
-    return found;
-  }
-  function wireBucketLabel(ctx, key) {
-    if (key === "__none") return "Not on any model";
-    var t = null; (ctx.targets || []).forEach(function (x) { if (x.key === key) t = x; });
-    if (!t) return key;
-    return t.own ? t.model : (t.fam + " › " + t.prod + " · " + t.model);
-  }
-  function wireMoveBtn(inst, currentKey) {
-    // A move ICON that opens a custom themed dropdown (see wireOpenMoveMenu) listing the
-    // other model buckets. data-cur is the file's current bucket, excluded from the menu.
-    return '<button class="wire-move" type="button" data-id="' + inst.id + '" data-cur="' + escapeAttr(currentKey) + '"' +
-      ' aria-haspopup="menu" aria-expanded="false" title="Move to another model"' +
-      ' aria-label="Move ' + escapeAttr(inst.name) + ' to another model">' + MOVEICON + '</button>';
-  }
-  function wireFileChip(inst, ctx, currentKey) {
-    var isFolder = inst.folder;
-    var stateCls = isFolder ? ' folder' : (inst.existing ? ' existing' : ' isnew');
-    var tag = isFolder ? '<span class="wire-tag">folder</span>'
-      : (inst.existing ? '<span class="wire-tag">existing</span>' : '<span class="wire-tag new">new</span>');
-    var body = (!isFolder && inst.isImage && inst.thumb ? '<img src="' + escapeAttr(inst.thumb) + '" alt="" loading="lazy" decoding="async" draggable="false">' : '<span class="wire-ficon">' + svg(isFolder ? ICONS.render : ICONS.spec) + '</span>') +
-      '<span class="wire-fname">' + escapeHtml(inst.name) + '</span>';
-    // Opener is a SPAN (not a <button>): a <button> as the chip's main grab area swallows the parent's
-    // HTML5 drag (browsers won't start a drag from a form control), which made files impossible to drag
-    // into another model/product. As a span, the whole chip drags from its body; click/Enter still previews.
-    var opener = isFolder
-      ? '<span class="wire-open wire-open-static">' + body + '</span>'
-      : '<span class="wire-open" role="button" tabindex="0" data-id="' + inst.id + '" title="' + escapeAttr(inst.name) + '" aria-label="Preview ' + escapeAttr(inst.name) + '">' + body + '</span>';
-    // Only the folder chip carries an outer title (it explains the dashed state — genuinely additive).
-    // For a file the outer title just repeated the inner opener's, giving AT the filename twice; the
-    // opener keeps it, which is also where the pointer lands to read an ellipsised .wire-fname.
-    return '<span class="wire-file' + stateCls + '"' +
-      ' draggable="' + (isFolder ? 'false' : 'true') + '" data-id="' + inst.id + '"' +
-      (isFolder ? ' title="This model is linked to a whole auto-updating folder"' : '') + '>' +
-      opener + tag +
-      (isFolder ? '' : wireMoveBtn(inst, currentKey)) +
-      (isFolder ? '' : '<button class="wire-dup" type="button" data-id="' + inst.id + '" title="Duplicate — then move the copy to another model" aria-label="Duplicate ' + escapeAttr(inst.name) + '">' + DUPICON + '</button>') +
-      // The folder chip can be removed too (F142): dropping it from the bucket is how a PM replaces an
-      // auto-updating folder with explicit files, or clears it. wireApprove counts the folder URL in `before`,
-      // so the removal is declared to the shrink guard and an emptied model is confirmed like any other.
-      (isFolder
-        ? '<button class="wire-del" type="button" data-id="' + inst.id + '" title="Remove this folder link — the model keeps its other files" aria-label="Remove the auto-updating folder link">' + DELICON + '</button>'
-        : '<button class="wire-del" type="button" data-id="' + inst.id + '" title="Remove this file" aria-label="Remove ' + escapeAttr(inst.name) + '">' + DELICON + '</button>') +
-      '</span>';
-  }
-  function renderWirePreview(box, ctx) {
-    var result = box.querySelector("#wireResult");
-    var single = ctx.models.length === 1; // one model → everything goes to it
-    ctx.targets = ctx.models.map(function (m) { return { key: wireKey(ctx.fam, ctx.prod, m), fam: ctx.fam, prod: ctx.prod, model: m, own: true }; });
-    var assign = { __none: [] }; ctx.targets.forEach(function (t) { assign[t.key] = []; });
-    var seen = { __none: {} }; ctx.targets.forEach(function (t) { seen[t.key] = {}; }); // per-bucket identity set
-    // 1) Show each model's ALREADY-WIRED content first (preserved on save); folder → a locked chip.
-    ctx.targets.forEach(function (t) {
-      var ex = (ctx.existing && ctx.existing[t.model]) || { files: [], hasFolder: false, folderUrl: "" };
-      wireFolderChips(ex).forEach(function (c) { assign[t.key].push(c); });
-      ex.files.forEach(function (f) { var k = wireIdent(f); if (!seen[t.key][k]) { seen[t.key][k] = 1; assign[t.key].push(wireInst(f, true)); } });
-    });
-    // 2) New folder files, auto-sorted — skip any already wired to that model (de-dupe by file identity).
-    ctx.files.forEach(function (f) {
-      var target = "__none";
-      if (single) target = ctx.targets[0].key;
-      else { for (var i = 0; i < ctx.models.length; i++) { if (matchesModel(f.name, ctx.models[i])) { target = ctx.targets[i].key; break; } } }
-      var k = wireIdent(f);
-      if (seen[target] && seen[target][k]) return; // already present in this bucket → don't duplicate
-      if (seen[target]) seen[target][k] = 1;
-      assign[target].push(wireInst(f, false));
-    });
-    ctx.assign = assign;
-    result.innerHTML =
-      '<div class="wire-scope">Linking the <b>' + escapeHtml(ctx.resource) + '</b> resource for <b>' + escapeHtml(ctx.fam) + ' › ' + escapeHtml(ctx.prod) + '</b></div>' +
-      '<div class="wire-summary"><b>Nothing is saved yet</b> — review below, then <b>Approve &amp; save</b> at the bottom. <b>Drag</b> a file onto the right model, <b>click</b> it to preview, or use the <b>copy</b> icon to put one file on several models. Files tagged <b>“existing”</b> are already saved and kept (nothing is duplicated); <b>“Sort into another product”</b> sends a stray file elsewhere; “Not on any model” files won’t show on the site.</div>' +
-      '<div id="wireBuckets"></div>' +
-      '<div class="wire-elsewhere">' +
-        '<span class="wire-elsewhere-lbl">Move a file to another product?</span>' +
-        '<select class="wire-sel" id="wireOtherProd" aria-label="Another product"></select>' +
-        '<select class="wire-sel" id="wireOtherModel" aria-label="Model in the other product"></select>' +
-        '<button class="wire-btn" id="wireAddTarget" type="button">Add this model</button>' +
-      '</div>' +
-      '<div class="wire-elsewhere-hint">Pick the product &amp; model, then <b>Add this model</b> — a new bucket appears below (highlighted); <b>drag the file into it</b> (or use each file’s <b>Move</b> button). There’s no drop target until you add the model.</div>' +
-      '<div class="wire-approve"><button class="wire-btn primary" id="wireApprove" type="button">Approve &amp; save</button></div>';
-    wireInitElsewhere(box, ctx);
-    renderWireBuckets(box, ctx);
-    result.querySelector("#wireApprove").addEventListener("click", function () { wireApprove(ctx, this); });
-  }
-  function renderWireBuckets(box, ctx) {
-    var host = box.querySelector("#wireBuckets"); if (!host) return;
-    // Record whose context this panel is currently showing, so a slow async load started for an EARLIER
-    // context can tell it has been superseded and stop repainting (see wireAddTarget).
-    box._wireCtx = ctx;
-    function bucketByKey(key, label, insts, isNone) {
-      var hasFolder = insts.some(function (i) { return i.folder; });
-      var hasFile = insts.some(function (i) { return !i.folder; });
-      var note = (hasFolder && hasFile) ? '<div class="wire-note wire-warn">' + svg(ICONS.alert) + '<span><b>Heads up:</b> this model also shows everything in its <b>auto-updating folder</b>. The files below are added alongside it. The folder link stays; new files in the folder keep appearing on their own.</span></div>' : '';
-      var actions = '';
-      if (isNone && insts.length) {
-        note = '<div class="wire-note">These aren’t on any model. On <b>Approve</b> they’ll be parked in the <b>Unsorted</b> pile to sort later — or handle them now:</div>';
-        actions = '<div class="wire-none-actions">' +
-          '<button class="wire-btn" id="wireKeepAll" type="button">Keep all → Unsorted pile</button>' +
-          '<button class="wire-btn danger" id="wireDeleteAll" type="button">Discard all</button></div>';
-      }
-      return '<div class="wire-bucket' + (isNone ? ' wire-unmatched' : '') + '" data-key="' + escapeAttr(key) + '">' +
-        '<div class="wire-model-name">' + label + ' <b>' + insts.length + '</b></div>' + note + actions +
-        '<div class="wire-files">' + (insts.length ? insts.map(function (i) { return wireFileChip(i, ctx, key); }).join("") : '<span class="wire-none">drop files here</span>') + '</div></div>';
-    }
-    var html = ctx.targets.map(function (t) {
-      var label = t.own ? escapeHtml(t.model)
-        : '<span class="wire-otherpath">' + escapeHtml(t.fam) + ' › ' + escapeHtml(t.prod) + ' · </span>' + escapeHtml(t.model);
-      return bucketByKey(t.key, label, ctx.assign[t.key] || [], false);
-    }).join("");
-    html += bucketByKey("__none", "Not on any model", ctx.assign.__none, true);
-    host.innerHTML = html;
-    [].forEach.call(host.querySelectorAll(".wire-bucket"), function (bk) {
-      bk.addEventListener("dragover", function (e) { e.preventDefault(); bk.classList.add("drop"); });
-      // dragleave also fires when the pointer moves onto a CHILD of the bucket, which made the drop
-      // highlight flicker across a bucket that already had chips. Only clear when the pointer has really
-      // left the bucket's subtree (relatedTarget is the node it moved TO).
-      bk.addEventListener("dragleave", function (e) {
-        var to = e && e.relatedTarget;
-        if (to && bk.contains(to)) return;
-        bk.classList.remove("drop");
-      });
-      bk.addEventListener("drop", function (e) { e.preventDefault(); bk.classList.remove("drop"); wireDrop(box, ctx, bk.getAttribute("data-key")); });
-    });
-    [].forEach.call(host.querySelectorAll(".wire-file"), function (chip) {
-      var id = chip.getAttribute("data-id"), inst = wireFindInst(ctx, id);
-      if (!inst || inst.folder) return; // folder chip is a locked, non-draggable marker
-      chip.addEventListener("dragstart", function (e) { wireDrag = id; try { e.dataTransfer.setData("text/plain", id); } catch (x) {} chip.classList.add("dragging"); });
-      // Clear wireDrag on dragend: a drag released outside a bucket left the id set, so the NEXT drop of
-      // anything at all on a bucket (text, an image, a file from the desktop) silently moved that chip.
-      chip.addEventListener("dragend", function () { chip.classList.remove("dragging"); wireDrag = null; });
-    });
-    [].forEach.call(host.querySelectorAll(".wire-open"), function (op) {
-      var inst = wireFindInst(ctx, op.getAttribute("data-id"));
-      if (!inst) return; // folder opener has no data-id → skipped
-      op.addEventListener("click", function () { if (inst.url) openPreview(inst.url, inst.name); });
-      op.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (inst.url) openPreview(inst.url, inst.name); } });
-    });
-    [].forEach.call(host.querySelectorAll(".wire-move"), function (btn) {
-      btn.addEventListener("click", function (e) { e.stopPropagation(); wireOpenMoveMenu(btn, box, ctx); });
-    });
-    [].forEach.call(host.querySelectorAll(".wire-dup"), function (btn) {
-      btn.addEventListener("click", function (e) { e.stopPropagation(); wireDuplicate(box, ctx, btn.getAttribute("data-id")); });
-    });
-    [].forEach.call(host.querySelectorAll(".wire-del"), function (btn) {
-      btn.addEventListener("click", function (e) { e.stopPropagation(); wireRemove(box, ctx, btn.getAttribute("data-id")); });
-    });
-    var keepBtn = host.querySelector("#wireKeepAll");
-    if (keepBtn) keepBtn.addEventListener("click", function () { wireKeepAllUnsorted(box, ctx, this); });
-    var delAllBtn = host.querySelector("#wireDeleteAll");
-    if (delAllBtn) delAllBtn.addEventListener("click", function () {
-      var n = (ctx.assign.__none || []).filter(function (i) { return !i.folder; }).length;
-      pfConfirmIf(n > 0, {
-        title: "Discard unassigned files?",
-        body: ["Discard " + n + " file" + (n === 1 ? "" : "s") + " that aren’t on any model?",
-               "They won’t be saved, and they won’t be parked in the pile either."],
-        confirmLabel: "Discard", danger: true
-      }).then(function (ok) {
-        if (!ok) return;
-        ctx.assign.__none = []; renderWireBuckets(box, ctx);
-      });
-    });
-  }
-  function wireRemove(box, ctx, id) {
-    var gone = null, bk = null;
-    Object.keys(ctx.assign).forEach(function (mk) { ctx.assign[mk] = ctx.assign[mk].filter(function (x) { if (String(x.id) === String(id)) { gone = x; bk = mk; return false; } return true; }); });
-    renderWireBuckets(box, ctx);
-    // The re-render dropped focus to <body>: land it on the next chip in the same bucket, or the bucket itself (F117).
-    var host = box.querySelector("#wireBuckets");
-    var bucket = host && host.querySelector('.wire-bucket[data-key="' + cssEsc(bk || "__none") + '"]');
-    var next = bucket && (bucket.querySelector(".wire-open[tabindex]") || bucket.querySelector("button, [tabindex]"));
-    if (next && next.focus) next.focus();
-    if (srAnnounce && gone) srAnnounce.textContent = "Removed " + (gone.name || "file") + " from " + wireBucketLabel(ctx, bk);
-  }
-  function wireDrop(box, ctx, targetKey) {
-    var id = wireDrag; wireDrag = null; if (!id) return;
-    var inst = null;
-    Object.keys(ctx.assign).forEach(function (mk) {
-      ctx.assign[mk] = ctx.assign[mk].filter(function (x) { if (String(x.id) === String(id)) { inst = x; return false; } return true; });
-    });
-    if (!inst) return;
-    (ctx.assign[targetKey] || ctx.assign.__none).push(inst);
-    renderWireBuckets(box, ctx);
-  }
-  // Keyboard/screen-reader move (via the per-chip "Move" select): same effect as a drag+drop.
-  function wireMoveTo(box, ctx, id, targetKey) {
-    var inst = null;
-    Object.keys(ctx.assign).forEach(function (mk) {
-      ctx.assign[mk] = ctx.assign[mk].filter(function (x) { if (String(x.id) === String(id)) { inst = x; return false; } return true; });
-    });
-    if (!inst) return;
-    (ctx.assign[targetKey] || ctx.assign.__none).push(inst);
-    renderWireBuckets(box, ctx);
-    if (srAnnounce) srAnnounce.textContent = "Moved " + inst.name + " to " + wireBucketLabel(ctx, targetKey);
-    // Re-render replaced the DOM — return focus to the moved chip so keyboard flow continues.
-    var host = box.querySelector("#wireBuckets");
-    var moved = host && host.querySelector('.wire-file[data-id="' + inst.id + '"] .wire-open');
-    if (moved && moved.focus) moved.focus();
-  }
-  function wireCloseMoveMenu(focusTrigger) {
-    if (!wireMenu) return;
-    var m = wireMenu, trigger = m._trigger; wireMenu = null;
-    document.removeEventListener("keydown", m._onKey, true);
-    document.removeEventListener("mousedown", m._onDoc, true);
-    window.removeEventListener("scroll", m._onScroll, true);
-    window.removeEventListener("resize", m._onScroll, true);
-    if (m.parentNode) m.parentNode.removeChild(m);
-    if (trigger) { trigger.setAttribute("aria-expanded", "false"); trigger.removeAttribute("aria-controls"); if (focusTrigger && trigger.focus) trigger.focus(); }
-  }
-  // Custom themed Move dropdown: full control over the look (unlike a native <select> popup),
-  // positioned fixed near the trigger so it's never clipped, keyboard + screen-reader operable.
-  var _wireMenuSeq = 0;
-  function wireOpenMoveMenu(btn, box, ctx) {
-    if (wireMenu) { var same = wireMenu._trigger === btn; wireCloseMoveMenu(false); if (same) return; } // toggle
-    var id = btn.getAttribute("data-id"), curKey = btn.getAttribute("data-cur");
-    var keys = (ctx.targets || []).map(function (t) { return t.key; }).concat(["__none"]);
-    var menu = document.createElement("div");
-    menu.id = "wireMoveMenu" + (++_wireMenuSeq); // so the trigger can point aria-controls at it
-    menu.className = "wire-menu"; menu.setAttribute("role", "menu"); menu.setAttribute("aria-orientation", "vertical"); menu.setAttribute("aria-label", "Move to a model");
-    var html = '<div class="wire-menu-head">Move to…</div>';
-    // "Copy to every model" — fan this file out to all of the selected product's models at once.
-    var ownCount = (ctx.targets || []).filter(function (t) { return t.own; }).length;
-    if (ownCount >= 2) html += '<button class="wire-menu-item wire-menu-all" type="button" role="menuitem" data-key="__all">Copy to every model</button>';
-    keys.forEach(function (k) {
-      if (k === curKey) return; // can't move to the bucket it's already in
-      var none = (k === "__none");
-      html += '<button class="wire-menu-item' + (none ? ' wire-menu-none' : '') + '" type="button" role="menuitem" data-key="' + escapeAttr(k) + '">' + escapeHtml(wireBucketLabel(ctx, k)) + '</button>';
-    });
-    menu.innerHTML = html;
-    document.body.appendChild(menu);
-    // Reposition on scroll/resize instead of closing (the menu is position:fixed); close only if the trigger
-    // scrolls out of view. Internal menu scrolling is excluded in _onScroll below.
-    function place() {
-      var r = btn.getBoundingClientRect();
-      var vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
-      if (r.bottom < 0 || r.top > vh) { wireCloseMoveMenu(false); return; }
-      var left = Math.min(r.left, vw - menu.offsetWidth - 8); if (left < 8) left = 8;
-      var top = r.bottom + 4;
-      if (top + menu.offsetHeight > vh - 8) { var up = r.top - menu.offsetHeight - 4; top = up >= 8 ? up : Math.max(8, vh - menu.offsetHeight - 8); }
-      menu.style.left = left + "px"; menu.style.top = top + "px";
-    }
-    place();
-    var items = [].slice.call(menu.querySelectorAll(".wire-menu-item"));
-    function focusItem(i) { if (items.length) items[(i + items.length) % items.length].focus(); }
-    items.forEach(function (it) {
-      it.addEventListener("click", function () { var key = it.getAttribute("data-key"); wireCloseMoveMenu(false); if (key === "__all") wireToAllModels(box, ctx, id); else wireMoveTo(box, ctx, id, key); });
-    });
-    menu._trigger = btn;
-    menu._onKey = function (e) {
-      if (e.key === "Escape") { e.preventDefault(); wireCloseMoveMenu(true); return; }
-      var idx = items.indexOf(document.activeElement);
-      if (e.key === "ArrowDown") { e.preventDefault(); focusItem(idx < 0 ? 0 : idx + 1); }
-      else if (e.key === "ArrowUp") { e.preventDefault(); focusItem(idx < 0 ? items.length - 1 : idx - 1); }
-      else if (e.key === "Home") { e.preventDefault(); focusItem(0); }
-      else if (e.key === "End") { e.preventDefault(); focusItem(items.length - 1); }
-      else if (e.key === "Tab") { wireCloseMoveMenu(true); } // restore focus to the trigger, not <body>
-    };
-    menu._onDoc = function (e) { if (!menu.contains(e.target) && !btn.contains(e.target)) wireCloseMoveMenu(false); };
-    // Close when the PAGE scrolls (the menu is position:fixed), but NOT when scrolling INSIDE the menu
-    // itself (it can be taller than 60vh and scroll) — else lower items become unreachable. Capture-phase
-    // scroll fires for descendants too, so exclude scrolls originating in the menu by target.
-    menu._onScroll = function (e) { if (e && e.type !== "resize" && menu.contains(e.target)) return; place(); }; // reposition, don't close
-    document.addEventListener("keydown", menu._onKey, true);
-    document.addEventListener("mousedown", menu._onDoc, true);
-    window.addEventListener("scroll", menu._onScroll, true);
-    window.addEventListener("resize", menu._onScroll, true);
-    wireMenu = menu;
-    btn.setAttribute("aria-expanded", "true"); btn.setAttribute("aria-controls", menu.id);
-    focusItem(0);
-  }
-  // Composite bucket key so models from different products can coexist as drop targets.
-  function wireKey(fam, prod, model) { return fam + "§" + prod + "§" + model; }
   function wireModelsOf(fam, prod) {
     var out = [];
     CATALOG.forEach(function (c) { c.families.forEach(function (f) { if (f.name !== fam) return; f.products.forEach(function (p) { if (p.name === prod) out = p.models.slice(); }); }); });
     return out;
-  }
-  // "Sort into another product" picker: populate product + dependent model selects, wire Add.
-  function wireInitElsewhere(box, ctx) {
-    var ps = box.querySelector("#wireOtherProd"), ms = box.querySelector("#wireOtherModel");
-    if (!ps || !ms) return;
-    ps.innerHTML = '<option value="">Choose a product…</option>';
-    CATALOG.forEach(function (c) { c.families.forEach(function (f) { f.products.forEach(function (p) {
-      var o = document.createElement("option"); o.value = f.name + "§" + p.name; o.textContent = f.name + " › " + p.name; ps.appendChild(o);
-    }); }); });
-    function fillModels() {
-      var v = ps.value;
-      if (!v) { ms.innerHTML = '<option value="">Model…</option>'; return; }
-      var parts = v.split("§"), models = wireModelsOf(parts[0], parts[1]);
-      ms.innerHTML = models.length
-        ? '<option value="">Model…</option>' + models.map(function (m) { return '<option value="' + escapeAttr(m) + '">' + escapeHtml(m) + '</option>'; }).join("")
-        : '<option value="">(no models in sheet)</option>';
-    }
-    ps.addEventListener("change", fillModels); fillModels();
-    box.querySelector("#wireAddTarget").addEventListener("click", function () { wireAddTarget(box, ctx); });
-  }
-  function wireScrollToBucket(box, key) {
-    var buckets = box.querySelectorAll(".wire-bucket");
-    for (var i = 0; i < buckets.length; i++) {
-      if (buckets[i].getAttribute("data-key") === key) {
-        var bk = buckets[i];
-        if (bk.scrollIntoView) bk.scrollIntoView({ block: "nearest" });
-        bk.classList.remove("justadded"); void bk.offsetWidth; bk.classList.add("justadded"); // (re)start the flash
-        break;
-      }
-    }
-  }
-  function wireAddTarget(box, ctx) {
-    var ps = box.querySelector("#wireOtherProd"), ms = box.querySelector("#wireOtherModel");
-    var pv = ps.value, model = ms.value;
-    if (!pv || !model) { showToast('<span>Pick a product and a model to add.</span>'); return; }
-    var parts = pv.split("§"), fam = parts[0], prod = parts[1], key = wireKey(fam, prod, model);
-    if (ctx.assign[key]) { wireScrollToBucket(box, key); return; } // already a target
-    ctx.assign[key] = [];
-    ctx.targets.push({ key: key, fam: fam, prod: prod, model: model, own: (fam === ctx.fam && prod === ctx.prod) });
-    renderWireBuckets(box, ctx);
-    wireScrollToBucket(box, key);
-    // Load that model's already-wired files so dropping onto it MERGES instead of overwriting.
-    //
-    // ctx.existing MUST get an entry either way. wireApprove reads it for two things: to refuse writing a
-    // model whose current links it couldn't read (`exState.error`), and to work out how many links the save
-    // intends to drop (`expectRemoved`). A model added here used to get no entry at all, which reads as
-    // "no links" — so the error guard was structurally unreachable for a cross-product target, and a failed
-    // or half-finished read let the dragged files be written as that model's COMPLETE set. Start from
-    // "unreadable" and only clear it once the read actually lands.
-    ctx.existing = ctx.existing || {};
-    ctx.existing[model] = { files: [], hasFolder: false, folderUrl: "", error: true };
-    if (window.PF_getToken) {
-      window.PF_getToken().then(function (token) { return wireLoadExisting(model, ctx.resource, "Bearer " + token); })
-        .then(function (ex) {
-          // The wire tool can be rebuilt underneath this read (another product opened, the panel
-          // re-rendered). Repainting a SUPERSEDED context into the fresh buckets showed a screen that no
-          // longer matched what Approve would write.
-          if (!document.body.contains(box)) return;
-          if (box._wireCtx && box._wireCtx !== ctx) return;
-          ctx.existing[model] = ex;
-          if (!ctx.assign[key]) return;
-          var seen = {}; ctx.assign[key].forEach(function (i) { seen[wireIdent(i)] = 1; });
-          if (!ctx.assign[key].some(function (i) { return i.folder; }))
-            wireFolderChips(ex).reverse().forEach(function (c) { ctx.assign[key].unshift(c); });
-          ex.files.forEach(function (f) { var k = wireIdent(f); if (!seen[k]) { seen[k] = 1; ctx.assign[key].push(wireInst(f, true)); } });
-          renderWireBuckets(box, ctx);
-        }, function () { /* stays flagged unreadable — wireApprove will skip this model and say so */ });
-    }
-  }
-  function wireDuplicate(box, ctx, id) {
-    var src = null, bk = null;
-    Object.keys(ctx.assign).forEach(function (mk) { ctx.assign[mk].forEach(function (x) { if (String(x.id) === String(id)) { src = x; bk = mk; } }); });
-    if (!src || src.folder) return;
-    var copy = wireInst(src, false);
-    ctx.assign[bk].push(copy); // a fresh copy (drag it onto another model)
-    renderWireBuckets(box, ctx);
-    var host = box.querySelector("#wireBuckets");
-    var el = host && host.querySelector('.wire-file[data-id="' + copy.id + '"] .wire-open');
-    if (el && el.focus) el.focus();
-    if (srAnnounce) srAnnounce.textContent = "Duplicated " + (src.name || "file");
-  }
-  // "Copy to every model" — fan one file out to ALL models of the SELECTED product at once (e.g. a
-  // spec sheet identical across models), instead of dragging it onto each model one by one. Only the
-  // selected product's own models (t.own); skips any model that already has this file.
-  function wireToAllModels(box, ctx, id) {
-    var src = null;
-    Object.keys(ctx.assign).forEach(function (mk) { ctx.assign[mk].forEach(function (x) { if (String(x.id) === String(id)) src = x; }); });
-    if (!src || src.folder) return;
-    var ident = wireIdent(src), n = 0;
-    (ctx.targets || []).forEach(function (t) {
-      if (!t.own) return;
-      var bucket = ctx.assign[t.key] || (ctx.assign[t.key] = []);
-      if (bucket.some(function (i) { return wireIdent(i) === ident; })) return; // already on this model
-      bucket.push(wireInst(src, false));
-      n++;
-    });
-    renderWireBuckets(box, ctx);
-    var host = box.querySelector("#wireBuckets");
-    var back = host && host.querySelector('.wire-file[data-id="' + src.id + '"] .wire-open');
-    if (back && back.focus) back.focus();
-    showToast(svg(ICONS.check) + '<span>Copied “' + escapeHtml(src.name || "file") + '” to ' + n + ' model' + (n === 1 ? "" : "s") + '.</span>');
-  }
-  function wireApprove(ctx, btn) {
-    var btnDone = busyButton(btn, "Saving…");
-    // The bucket already holds the desired final set (existing + new, merged). De-dupe by file
-    // identity so the same file can't be written twice. Explicit files win over a preserved folder;
-    // a lone folder marker is written back untouched (auto-update kept); truly empty → "" (clear).
-    function valueFor(key) {
-      var insts = ctx.assign[key] || [];
-      var files = insts.filter(function (i) { return !i.folder; });
-      var seen = {}, urls = [];
-      // A still-present "Current folder — auto-updating" marker is kept ALONGSIDE any explicit files —
-      // a supported mixed folder+file resource (openMixedGallery), and what the Files-to-place writer
-      // already does. Dropping it whenever a file was added silently replaced the auto-updating folder
-      // (and every render it surfaced) with that one file, and slipped past both shrink guards because a
-      // 1-URL folder collapsing to a 1-URL file nets to zero removed. A PM who means to REPLACE the
-      // folder removes its chip first, so it's simply absent here.
-      // Every folder chip still present, not just the first (F041).
-      insts.filter(function (i) { return i.folder; }).forEach(function (f) { var k = "f:" + window.PF.canonFolderUrl(f.url || ""); if (f.url && !seen[k]) { seen[k] = 1; urls.push(f.url); } });
-      files.forEach(function (i) { var k = wireIdent(i); if (!seen[k] && i.url) { seen[k] = 1; urls.push(i.url); } });
-      return urls.join(" ");
-    }
-    // Group by (family, product). Selected product clears emptied models (reflects removals);
-    // added products are only written when they have content, so they can never be cleared/clobbered.
-    var groups = {}, skipped = [];
-    ctx.targets.forEach(function (t) {
-      var gk = t.fam + "§" + t.prod;
-      if (!groups[gk]) groups[gk] = { fam: t.fam, prod: t.prod, own: t.own, assignments: {}, expectRemoved: 0, expectRemovedByModel: {}, base: {} };
-      var exState = (ctx.existing && ctx.existing[t.model]) || null;
-      var val = valueFor(t.key);
-      // If we couldn't read this model's current links during preview, leave its cell completely
-      // untouched — writing here would either clear the real link (val="") or clobber unread files.
-      if (exState && exState.error) { if (val) skipped.push(t.model); return; }
-      // Only a model whose links actually CHANGE is sent (F037). Every model of the product used to be — the
-      // server re-wrote their rows and What's New showed all of them as new, and a model with no row for this
-      // resource failed a save that had otherwise worked.
-      if (exState && window.PF.sameUrlSet(wireExistingUrls(exState), window.PF.splitCellUrls(val))) return;
-      if (t.own || val) {
-        groups[gk].assignments[t.model] = val;
-        // Compare-and-swap pre-image: only for models whose current links were actually read. A model
-        // added from another product starts as { error: true } until its read lands, so an unread one is
-        // left to the shrink guard rather than sending a false "" base.
-        if (exState && !exState.error) {
-          groups[gk].base[t.model] = wireExistingUrls(exState);
-        }
-        // Declare the links this save intends to drop on that model — a cleared cell, or chips the PM
-        // removed from the bucket. The server refuses anything beyond this, so a preview that has gone
-        // stale can't take links added since with it.
-        var before = exState ? wireExistingUrls(exState).length : 0;
-        // Count URLs the way the SERVER parses the cell (splitCellUrls), not a raw whitespace split — a URL
-        // containing a raw space would otherwise over-count `after`, making a real removal look like it
-        // dropped fewer links than it did, so the shrink guard refuses it (409) every time.
-        var after = val ? (window.PF.splitCellUrls(val) || []).length : 0;
-        if (before > after) { groups[gk].expectRemoved += before - after; groups[gk].expectRemovedByModel[t.model] = (groups[gk].expectRemovedByModel[t.model] || 0) + (before - after); }
-      }
-    });
-    var list = Object.keys(groups).map(function (k) { return groups[k]; }).filter(function (g) { return Object.keys(g.assignments).length; });
-    // Leftovers still in "Not on any model" get parked in the pile (so nothing is dropped).
-    var noneItems = wireUnsortedItems(ctx);
-    if (!list.length && !noneItems.length) {
-      btnDone();
-      if (skipped.length) { showError('<span>Couldn’t read the current links for ' + skipped.length + ' model' + (skipped.length === 1 ? '' : 's') + ' just now — nothing was saved, so their existing links are untouched. Please re-open the folder and try again in a moment.</span>', 9000); }
-      else showToast('<span>Nothing to save yet — drag files onto a model, or use the Unsorted-pile buttons below.</span>');
-      return;
-    }
-    // Guard against silent link loss: if Approve would clear a model that currently has a link (the PM
-    // removed its chips), confirm first — mirrors the section editor's delete confirmation.
-    var clears = [];
-    ctx.targets.forEach(function (t) {
-      if (!t.own) return; // only the selected product's models can be cleared
-      var ex = (ctx.existing && ctx.existing[t.model]) || null;
-      if (!ex || ex.error) return;
-      var had = (ex.files && ex.files.length) || ex.hasFolder;
-      if (had && !valueFor(t.key)) clears.push(t.model);
-    });
-    pfConfirmIf(clears.length > 0, {
-      title: "Remove existing links?",
-      body: ["This will remove the existing " + ctx.resource + " link" + (clears.length === 1 ? "" : "s") + " from " + clears.length + " model" + (clears.length === 1 ? "" : "s") + ": " + clears.slice(0, 8).join(", ") + (clears.length > 8 ? ", …" : "") + ".",
-             "The files stay in SharePoint — only the links are cleared."],
-      confirmLabel: "Remove links", danger: true
-    }).then(function (ok) {
-    if (!ok) { btnDone(); return; }
-
-    var wroteModels = {}; // models the SERVER confirmed it wrote — the only ones safe to clear health for
-    Promise.resolve().then(function () {
-      var updated = 0, prods = 0;
-      return list.reduce(function (chain, g) {
-        return chain.then(function () {
-          // Compare-and-swap base only when this is a SINGLE product: a multi-product save's "Approve
-          // again to finish the rest" retry must stay idempotent, and a committed product's base would go
-          // stale and falsely conflict on the re-click. Multi-product falls back to the shrink guard.
-          // postWire throws on a rejected link or a model with no resource row, so a 200 that did not
-          // write everything can no longer read as success here.
-          return postWire(g.fam, g.prod, ctx.resource, g.assignments, { expectRemoved: g.expectRemoved || 0, expectRemovedByModel: g.expectRemovedByModel || {}, base: (list.length === 1 ? (g.base || null) : null) })
-            .then(function (res) {
-              updated += (res.updated || 0); if (res.updated) prods++;
-              res.wrote.forEach(function (m) { wroteModels[m] = 1; }); // clear health only for these
-            });
-        });
-      }, Promise.resolve()).then(function () {
-        if (!noneItems.length) return { updated: updated, prods: prods, pileAdded: 0 };
-        // A failed park is REPORTED: these files are on no model, and the bucket holding them was about to be
-        // re-rendered away under a "Saved." toast (F047/F042).
-        return apiFetch("/api/unsorted", { method: "POST", body: { action: "add", items: noneItems } })
-          .then(function (pile) { return { updated: updated, prods: prods, pileAdded: (pile && pile.added) || 0, pileFailed: false }; },
-                function () { return { updated: updated, prods: prods, pileAdded: 0, pileFailed: true }; });
-      });
-    }).then(function (res) {
-      if (res.pileFailed) {
-        // Leave the panel up: the leftovers are still listed under "Not on any model", where Keep all →
-        // Unsorted retries the park. Links that did save still refresh.
-        btnDone();
-        Object.keys(wroteModels).forEach(function (model) { clearHealthFor(model + "::" + ctx.resource); });
-        showError('<span>' + (res.updated ? 'Saved ' + res.updated + ' ' + escapeHtml(ctx.resource) + ' row' + (res.updated === 1 ? '' : 's') + ', but c' : 'C') + 'ouldn’t park the ' + noneItems.length + ' file' + (noneItems.length === 1 ? '' : 's') + ' left in “Not on any model” in the Unsorted pile. They’re still listed below — use Keep all → Unsorted to try again.</span>', 12000);
-        loadCatalog({ fresh: true }).then(refreshCovStats);
-        return;
-      }
-      var msg = res.updated ? ('Saved — ' + res.updated + ' ' + escapeHtml(ctx.resource) + ' row' + (res.updated === 1 ? '' : 's') + (res.prods > 1 ? ' across ' + res.prods + ' products' : '') + ' updated.') : 'Saved.';
-      if (res.pileAdded) msg += ' ' + res.pileAdded + ' unsorted file' + (res.pileAdded === 1 ? '' : 's') + ' parked.';
-      if (skipped.length) msg += ' ⚠ ' + skipped.length + ' model' + (skipped.length === 1 ? '' : 's') + ' couldn’t be read and ' + (skipped.length === 1 ? 'was' : 'were') + ' left unchanged — re-run to save changes to ' + (skipped.length === 1 ? 'it' : 'them') + '.';
-      toastSaved(msg, skipped.length ? 9000 : undefined); // hold the partial-save warning long enough to read
-      // Drop any pre-fix health flag on the models the server CONFIRMED it wrote (survives the reload
-      // re-seed). Clearing by intent rather than by outcome hid a still-broken link on a model whose row
-      // the write never touched.
-      Object.keys(wroteModels).forEach(function (model) { clearHealthFor(model + "::" + ctx.resource); });
-      loadCatalog({ fresh: true }).then(function () { if (view === "progress") renderCoverage(); });
-    }).catch(function (err) {
-      btnDone();
-      // A multi-product save is non-atomic: earlier products may have committed before this failure. Refresh
-      // (cache-bypassing) so anything already saved is reflected, and invite a retry — re-sending an
-      // already-saved product is idempotent, so Approve again finishes the rest without a full page reload.
-      if (isConflict(err)) showError('<span>Another PM changed these links since you opened the folder, so nothing was saved. Click Preview again to see the current links, then sort.</span>', 12000);
-      else showError('<span>Couldn’t finish saving (' + pmErr(err) + '). Some products may have saved — click “Approve &amp; save” again to finish the rest.</span>', 9000);
-      // Refresh the DATA only. Re-rendering Progress here threw away the preview — and every file the PM
-      // had sorted — that the message tells them to click again (F026).
-      loadCatalog({ fresh: true }).then(refreshCovStats);
-    });
-    });
-  }
-  // Payloads for the pile built from the current "Not on any model" files (skip folder markers).
-  function wireUnsortedItems(ctx) {
-    return (ctx.assign.__none || []).filter(function (i) { return !i.folder && i.url; }).map(function (i) {
-      return { name: i.name, url: i.url, fileId: i.fileId || "", resource: ctx.resource, folder: ctx.url };
-    });
-  }
-  function wireKeepAllUnsorted(box, ctx, btn) {
-    var items = wireUnsortedItems(ctx);
-    if (!items.length) { ctx.assign.__none = []; renderWireBuckets(box, ctx); return; }
-    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
-    apiFetch("/api/unsorted", { method: "POST", body: { action: "add", items: items } })
-      .then(function (res) {
-        ctx.assign.__none = []; renderWireBuckets(box, ctx);
-        showToast(svg(ICONS.check) + '<span>' + (res.added || 0) + ' file' + (res.added === 1 ? '' : 's') + ' saved to the pile.</span>');
-      }).catch(function (err) {
-        if (btn) { btn.disabled = false; btn.textContent = "Keep all → Unsorted pile"; }
-        showError('<span>Couldn’t save to the pile (' + pmErr(err) + ').</span>', 7000);
-      });
   }
 
   /* ============================================================
@@ -2767,7 +2050,7 @@
     var box = document.createElement("div"); box.className = "wire unsorted";
     box.innerHTML =
       (bare ? '' : '<div class="wire-head" role="heading" aria-level="2">' + svg(ICONS.folder) + '<span>The pile</span><span class="uns-count" id="unsCount"></span></div>') +
-      '<p class="wire-lead">Stray files — parked from Add files, or found sitting in a shared folder with a name that matches no model. Preview each, then sort it into a product &amp; model; it’s linked there (merged with anything already saved) and drops off this list.</p>' +
+      '<p class="wire-lead">Stray files found in a shared folder with a name that matches no model. Preview each, then sort it into a product &amp; model; it’s linked there (merged with anything already saved) and drops off this list.</p>' +
       '<div id="unsList"><div class="wire-msg">Loading…</div></div>';
     loadUnsorted(box);
     return box;
@@ -2775,14 +2058,12 @@
   function loadUnsorted(box) {
     var list = box.querySelector("#unsList"); if (!list) return;
     if (!window.PF_getToken) { list.innerHTML = '<div class="wire-msg err">Please sign in again.</div>'; return; }
-    // The pile is two sources rendered as one list: files a PM parked from Add files (/api/unsorted)
-    // AND orphan files the nightly scan found loose in a shared folder (resolved client-side). Orphans are
-    // best-effort — resolveOrphanItems never rejects, so only an /api/unsorted failure surfaces an error.
+    // The pile is the orphan files the nightly scan found loose in a shared folder (resolved client-side). It used
+    // to hold files parked from the retired folder tool too (/api/unsorted, retired 2026-10-28 with its empty sheet).
     // Generation guard: a Save/Remove triggers a reload while an earlier one may still be resolving; only the
     // NEWEST load may paint, or a slower earlier response could clobber the list with stale rows.
     var live = loadGen(box);
     Promise.all([
-      apiFetch("/api/unsorted").then(function (data) { return data.items || []; }),
       resolveOrphanItems(),
       // Server-side dismissals: an orphan "Hide" is tombstoned via /api/placements (action "dismiss"), so it
       // holds for every PM/device — not just the browser that hid it. Best-effort: an outage → no server
@@ -2790,20 +2071,20 @@
       placementsStore.get().catch(function () { return { skip: [] }; })
     ]).then(function (arr) {
       if (!live()) return; // superseded by a newer reload
-      var parked = arr[0] || [], orphans = arr[1] || [];
+      var orphans = arr[0] || [];
       // Reconcile orphans against live state client-side (the cron's list can be ~24h stale): drop any whose
-      // file is already linked to a model (Saved since the last scan) or already shown as a parked row, and
+      // file is already linked to a model (Saved since the last scan), and
       // dedup orphan-vs-orphan by canonical file url. Unresolved rows (no url) can't be deduped — keep them.
       var wired = (window.PF && PF.wiredUrlSet) ? PF.wiredUrlSet(LINKS) : {};
-      var skip = {}; ((arr[2] && arr[2].skip) || []).forEach(function (u) { if (window.PF) skip[PF.canonFileUrl(u)] = 1; });
-      var taken = {}; parked.forEach(function (p) { if (p.url && window.PF) taken[PF.canonFileUrl(p.url)] = 1; });
+      var skip = {}; ((arr[1] && arr[1].skip) || []).forEach(function (u) { if (window.PF) skip[PF.canonFileUrl(u)] = 1; });
+      var taken = {};
       orphans = orphans.filter(function (o) {
         if (!o.url || !window.PF) return true;
         var c = PF.canonFileUrl(o.url);
-        if (wired[c] || taken[c] || skip[c]) return false; // wired since, already parked, or dismissed elsewhere (server tombstone)
+        if (wired[c] || taken[c] || skip[c]) return false; // wired since, a duplicate, or dismissed elsewhere (server tombstone)
         taken[c] = 1; return true;
       });
-      renderUnsorted(box, parked.concat(orphans));
+      renderUnsorted(box, orphans);
     })
       .catch(function (err) { if (!live()) return; list.innerHTML = '<div class="wire-msg err">Couldn’t load the pile (' + pmErr(err) + ').</div>'; if (box._onError) box._onError(); });
   }
@@ -2943,7 +2224,7 @@
     var list = box.querySelector("#unsList");
     var cnt = box.querySelector("#unsCount"); if (cnt) cnt.textContent = items.length ? (" " + items.length) : "";
     if (box._onCount) box._onCount(items.length); // report to the To-do container (hide the box when the pile is empty)
-    if (!items.length) { list.innerHTML = '<div class="uns-empty">Nothing to sort right now — parked leftovers and loose folder files show up here.</div>'; return; }
+    if (!items.length) { list.innerHTML = '<div class="uns-empty">Nothing to sort right now — loose files from shared folders show up here.</div>'; return; }
     // Oldest-first so the longest-parked file leads (the API returns newest-first). ISO dates compare
     // lexically; an unknown date sorts last so it never masquerades as the oldest.
     items = items.slice().sort(function (a, b) { return String(a.addedAt || "9999").localeCompare(String(b.addedAt || "9999")); });
@@ -2952,39 +2233,25 @@
       // "Delete") — fold the filename into every accessible name so screen-reader and voice-control users
       // can tell which file a control acts on.
       var nm = escapeAttr(it.name || "file");
-      // Orphan rows (found loose in a shared folder) look the same but carry a "shared folder" tag + an
-      // open-folder link; an unresolved one (folder wouldn't list) shows a rename hint instead of the picker.
-      if (it.orphan) {
-        var fu = safeUrl(it.folderUrl); // block javascript:/data: — keep the URL invariant even though orphans only come from listable folders
-        var folderLink = fu ? '<a class="uns-folder-link" href="' + escapeAttr(fu) + '" target="_blank" rel="noopener" aria-label="Open the SharePoint folder for ' + nm + '" title="Open the folder in SharePoint">open folder ↗</a>' : "";
-        var fileCell = it.url
-          ? '<button class="uns-file" type="button" title="Preview">' + svg(fileTypeIcon(it.name)) + '<span class="uns-name">' + escapeHtml(it.name || "file") + '</span></button>'
-          : '<span class="uns-file uns-file-plain">' + svg(fileTypeIcon(it.name)) + '<span class="uns-name">' + escapeHtml(it.name || "file") + '</span></span>';
-        var sortCell = it.unresolved
-          ? '<span class="uns-sort uns-orphan-hint">Couldn’t read this folder — open it ↗ and rename the file to start with the model name.</span>'
-          : '<span class="uns-sort">' +
-              '<select class="wire-sel uns-prod" aria-label="Product for ' + nm + '"></select>' +
-              '<button class="wire-sel uns-mbtn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Model…, for ' + nm + '" disabled>Model…</button>' +
-              '<button class="wire-btn uns-assign" type="button" aria-label="Save ' + nm + ' onto the selected models">Save</button>' +
-            '</span>';
-        return '<div class="uns-row uns-orphan" data-i="' + i + '">' +
-          '<span class="uns-where">' + fileCell +
-            '<span class="uns-meta uns-orphan-tag" title="' + escapeAttr(it.detail || "In a shared folder; its name matches no model, so it shows nowhere") + '">shared folder</span>' + folderLink +
-          '</span>' + sortCell +
-          '<button class="wire-del uns-del" type="button" title="Not a stray file — hide it" aria-label="Hide ' + nm + '">' + DELICON + '</button>' +
-        '</div>';
-      }
-      return '<div class="uns-row" data-i="' + i + '">' +
-        '<span class="uns-where">' +
-          '<button class="uns-file" type="button" title="Preview">' + svg(fileTypeIcon(it.name)) + '<span class="uns-name">' + escapeHtml(it.name || "file") + '</span></button>' +
-          (it.addedBy ? '<span class="uns-meta">' + escapeHtml(prettyName(it.addedBy)) + '</span>' : "") + ageChip(it.addedAt, "", true) +
-        '</span>' +
-        '<span class="uns-sort">' +
-          '<select class="wire-sel uns-prod" aria-label="Product for ' + nm + '"></select>' +
-          '<button class="wire-sel uns-mbtn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Model…, for ' + nm + '" disabled>Model…</button>' +
-          '<button class="wire-btn uns-assign" type="button" aria-label="Save ' + nm + ' onto the selected models">Save</button>' +
-        '</span>' +
-        '<button class="wire-del uns-del" type="button" title="Remove from pile" aria-label="Remove ' + nm + ' from pile">' + DELICON + '</button>' +
+      // A row (found loose in a shared folder) carries a "shared folder" tag + an open-folder link; an unresolved
+      // one (folder wouldn't list) shows a rename hint instead of the picker.
+      var fu = safeUrl(it.folderUrl); // block javascript:/data: — keep the URL invariant even though orphans only come from listable folders
+      var folderLink = fu ? '<a class="uns-folder-link" href="' + escapeAttr(fu) + '" target="_blank" rel="noopener" aria-label="Open the SharePoint folder for ' + nm + '" title="Open the folder in SharePoint">open folder ↗</a>' : "";
+      var fileCell = it.url
+        ? '<button class="uns-file" type="button" title="Preview">' + svg(fileTypeIcon(it.name)) + '<span class="uns-name">' + escapeHtml(it.name || "file") + '</span></button>'
+        : '<span class="uns-file uns-file-plain">' + svg(fileTypeIcon(it.name)) + '<span class="uns-name">' + escapeHtml(it.name || "file") + '</span></span>';
+      var sortCell = it.unresolved
+        ? '<span class="uns-sort uns-orphan-hint">Couldn’t read this folder — open it ↗ and rename the file to start with the model name.</span>'
+        : '<span class="uns-sort">' +
+            '<select class="wire-sel uns-prod" aria-label="Product for ' + nm + '"></select>' +
+            '<button class="wire-sel uns-mbtn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Model…, for ' + nm + '" disabled>Model…</button>' +
+            '<button class="wire-btn uns-assign" type="button" aria-label="Save ' + nm + ' onto the selected models">Save</button>' +
+          '</span>';
+      return '<div class="uns-row uns-orphan" data-i="' + i + '">' +
+        '<span class="uns-where">' + fileCell +
+          '<span class="uns-meta uns-orphan-tag" title="' + escapeAttr(it.detail || "In a shared folder; its name matches no model, so it shows nowhere") + '">shared folder</span>' + folderLink +
+        '</span>' + sortCell +
+        '<button class="wire-del uns-del" type="button" title="Not a stray file — hide it" aria-label="Hide ' + nm + '">' + DELICON + '</button>' +
       '</div>';
     }).join("");
     [].forEach.call(list.querySelectorAll(".uns-row"), function (rowEl) {
@@ -3035,27 +2302,14 @@
   var _pileFocusPending = false; // set by a pile action (Save/Remove/Hide) when it was invoked with focus inside the pile
   function unsortedDelete(box, it, btn) {
     var hadFocus = box.contains(document.activeElement); // capture NOW (synchronously), before any async reload moves it
-    // An orphan has no Unsorted-sheet row — "hide" just tombstones it locally so it drops off this list.
+    // "Hide" tombstones the file locally so it drops off this list, and server-side so it does for every PM.
     // (The nightly scan keeps its own list; once the file is linked or renamed it stops being flagged there.)
-    if (it.orphan) {
-      orphanDismiss(orphanKey(it));
-      // "for everyone" only once the server tombstone landed; a hide that stayed on this device says so (F032)
-      var undo = { label: "Undo", onClick: function () { orphanUndo(box, it); } };
-      if (!it.url) showToast('<span>Hidden on this device.</span>', 8000, undo);
-      else ftpMark("dismiss", it).then(function () { showToast('<span>Hidden for everyone.</span>', 8000, undo); }, function () { showToast('<span>Hidden here only — couldn’t hide it for everyone. Try again later.</span>', 9000, undo, true, "toast-err"); });
-      if (hadFocus) _pileFocusPending = true; loadUnsorted(box); return; }
-    pfConfirm({
-      title: "Remove from the pile?",
-      body: ["Remove “" + (it.name || "this file") + "” from the pile?",
-             "This only clears it from the pile — the file itself stays in SharePoint and is not deleted."],
-      confirmLabel: "Remove", danger: true
-    }).then(function (ok) {
-    if (!ok) return;
-    btn.disabled = true;
-    apiFetch("/api/unsorted", { method: "POST", body: { action: "remove", rowIds: [it.id] } })
-      .then(function () { showToast('<span>Removed from the pile.</span>'); if (hadFocus) _pileFocusPending = true; loadUnsorted(box); })
-      .catch(function (err) { btn.disabled = false; showError('<span>Couldn’t remove (' + pmErr(err) + ').</span>', 7000); });
-    });
+    orphanDismiss(orphanKey(it));
+    // "for everyone" only once the server tombstone landed; a hide that stayed on this device says so (F032)
+    var undo = { label: "Undo", onClick: function () { orphanUndo(box, it); } };
+    if (!it.url) showToast('<span>Hidden on this device.</span>', 8000, undo);
+    else ftpMark("dismiss", it).then(function () { showToast('<span>Hidden for everyone.</span>', 8000, undo); }, function () { showToast('<span>Hidden here only — couldn’t hide it for everyone. Try again later.</span>', 9000, undo, true, "toast-err"); });
+    if (hadFocus) _pileFocusPending = true; loadUnsorted(box);
   }
   function unsortedAssign(box, it, prodVal, targets, btn) {
     var hadFocus = box.contains(document.activeElement); // capture before the confirm/async reload moves focus
@@ -3088,7 +2342,7 @@
             if (!r || !r.ex || r.ex.error) { if (r && r.model) skipped.push(r.model); return; }
             var urls = [], seen = {};
             // Preserve an auto-updating FOLDER link the model already has — otherwise adding one explicit file
-            // would REPLACE the folder (and every render it surfaced) with just this file. (wireFamSave does this.)
+            // would REPLACE the folder (and every render it surfaced) with just this file.
             r.ex.folderUrls.forEach(function (u) { urls.push(u); }); // every folder link (F297)
             r.ex.files.forEach(function (f) { var k = wireIdent(f); if (!seen[k] && f.url) { seen[k] = 1; urls.push(f.url); } });
             var mk = wireIdent({ fileId: it.fileId, url: it.url }); if (!seen[mk] && it.url) { seen[mk] = 1; urls.push(it.url); }
@@ -3111,17 +2365,14 @@
               if (res.missed.length === Object.keys(assignments).length) throw new Error("no " + resource + " row in the sheet for " + res.missed.slice(0, 3).join(", "));
               return { wrote: res.wrote, missed: res.missed };
             })
-            // A parked file is removed from the Unsorted sheet; an orphan has no sheet row — tombstone it
-            // locally so it drops off at once (the nightly scan already won't re-flag a now-linked file).
+            // Tombstone the file locally so it drops off at once (the nightly scan already won't re-flag a now-linked file).
             // Keep the row when some targets were missed: there's still work to do on this file.
             .then(function (out) {
               // Keep the row while ANY target is unfinished — models the server didn't write (`missed`)
               // OR models whose current links couldn't be read at all (`skipped`, which were excluded from
               // the write above). Clearing it here is what left "try those again" pointing at nothing.
               if (out.missed.length || skipped.length) { out.pileCleared = false; return out; }
-              if (it.orphan) { orphanDismiss(orphanKey(it)); out.pileCleared = true; return out; }
-              return apiFetch("/api/unsorted", { method: "POST", body: { action: "remove", rowIds: [it.id] } })
-                .then(function () { out.pileCleared = true; return out; }, function () { out.pileCleared = false; return out; });
+              orphanDismiss(orphanKey(it)); out.pileCleared = true; return out;
             })
             .then(function (out) { return { done: out.wrote, skipped: skipped, missed: out.missed, pileCleared: out.pileCleared }; });
         });
@@ -3139,7 +2390,7 @@
       loadCatalog({ fresh: true });
     }).catch(function (err) {
       btnDone();
-      if (isConflict(err)) { loadCatalog({ fresh: true }).then(function (ok) { conflictToast(ok, 'Another PM changed ' + escapeHtml(resource) + ' on one of these models since this page loaded, so nothing was saved. The page now has the current links — click Save again.', 'Another PM changed ' + escapeHtml(resource) + ' on one of these models since this page loaded, so nothing was saved.'); }); return; }
+      if (isConflict(err)) { loadCatalog({ fresh: true, reportsFailure: true }).then(function (ok) { conflictToast(ok, 'Another PM changed ' + escapeHtml(resource) + ' on one of these models since this page loaded, so nothing was saved. The page now has the current links — click Save again.', 'Another PM changed ' + escapeHtml(resource) + ' on one of these models since this page loaded, so nothing was saved.'); }); return; }
       showError('<span>Couldn’t sort (' + pmErr(err) + ').</span>', 7000);
     });
     });
@@ -3171,6 +2422,44 @@
   function conflictToast(ok, freshText, lead) {
     if (ok) { showError('<span>' + freshText + '</span>', 12000); return; }
     showToast('<span>' + lead + ' Couldn’t load their changes — reload the page, then try again.</span>', 15000, { label: "Reload", onClick: function () { location.reload(); } }, true, "toast-err");
+  }
+  // Undo after a save that removed links (decision 4a, F079). undoRecord notes one write as it goes out; removeUndoToast
+  // offers the way back on the success toast. The undo refuses, and says so, if anyone changed these links since the save.
+  function undoRecord(fam, prod, resource, assignments, before) {
+    var rec = { fam: fam, prod: prod, resource: resource, before: {}, after: {} };
+    Object.keys(assignments).forEach(function (m) {
+      if (!before || !before[m]) return; // no pre-image: an undo must not read that as "there was nothing"
+      var was = before[m], val = assignments[m];
+      rec.before[m] = (!was.length && naFor(m, resource)) ? "N/A" : was.slice();
+      rec.after[m] = window.PF.isNACell(val) ? "N/A" : window.PF.splitCellUrls(val);
+    });
+    return rec;
+  }
+  function removeUndoToast(html, saved, repaint) {
+    toastSaved(html, 15000, { label: "Undo", onClick: function () { undoLinkSave(saved, repaint); } });
+  }
+  function undoLinkSave(saved, repaint) {
+    var groups = window.PF.planLinkUndo(saved), restored = 0;
+    groups.reduce(function (chain, g) {
+      return chain.then(function () {
+        return postWire(g.fam, g.prod, g.resource, g.assignments, { expectRemoved: g.expectRemoved, expectRemovedByModel: g.expectRemovedByModel, base: g.base }).then(function () {
+          restored++;
+          Object.keys(g.assignments).forEach(function (m) {
+            var key = m + "::" + g.resource, val = g.assignments[m];
+            if (window.PF.isNACell(val)) { setLinks(key, []); NA[key] = 1; }
+            else { setLinks(key, window.PF.splitCellUrls(val).map(function (u) { return { label: null, url: u }; })); delete NA[key]; }
+            clearHealthFor(key);
+          });
+        });
+      });
+    }, Promise.resolve()).then(function () {
+      toastSaved('Undone — the links are back as they were.');
+    }, function (e) {
+      var lead = restored ? 'Undid ' + restored + ' of ' + groups.length + ' changes, then stopped' : 'Couldn’t undo';
+      showError('<span>' + lead + (isConflict(e) ? ': another PM changed these links since your save, so they were left as they are.' : ' (' + pmErr(e) + ').') + '</span>', 12000);
+    }).then(function () {
+      return loadCatalog({ fresh: true, reportsFailure: true });
+    }).then(function () { refreshCovStats(); if (repaint) repaint(); });
   }
   function postWire(fam, prod, resource, assignments, opts) {
     opts = opts || {};
@@ -3230,13 +2519,17 @@
     var prodNode = null;
     CATALOG.forEach(function (c) { c.families.forEach(function (f) { if (f.name !== fam) return; f.products.forEach(function (pp) { if (pp.name === prod) prodNode = pp; }); }); });
     var assignments = {}, base = {}, finals = {}, byModel = {}, removed = 0;
+    // Every moved file of the cell in one write: a renamed folder took one click and one night per file (F100).
+    var swaps = Object.create(null), extra = moved.more || [];
+    swaps[moved.url] = moved.newUrl;
+    extra.forEach(function (p) { if (p.url && p.newUrl) swaps[p.url] = p.newUrl; });
     function distinctFiles(urls) { return window.PF.countDistinctFiles(urls); }
     (prodNode ? prodNode.models : [model]).forEach(function (m) {
       var curLinks = linksFor(m, resource), cur = curLinks.map(function (l) { return l.url; });
-      if (cur.indexOf(moved.url) === -1) return;
+      if (!cur.some(function (u) { return swaps[u]; })) return;
       base[m] = cur.slice();
       var out = [], seen = {};
-      curLinks.forEach(function (l) { var v = l.url === moved.url ? moved.newUrl : l.url; var k = window.PF.canonFileUrl(v); if (!seen[k]) { seen[k] = 1; out.push({ label: l.label, url: v }); } });
+      curLinks.forEach(function (l) { var v = swaps[l.url] || l.url; var k = window.PF.canonFileUrl(v); if (!seen[k]) { seen[k] = 1; out.push({ label: l.label, url: v }); } });
       finals[m] = out;
       assignments[m] = out.map(function (l) { return l.url; }).join(" ");
       // The model may already hold the new address (a PM re-linked the file through "Link a product folder"
@@ -3253,7 +2546,7 @@
     }
     return postWire(fam, prod, resource, assignments, { base: base, expectRemoved: removed, expectRemovedByModel: byModel }).then(function (res) {
       mirror(Object.keys(assignments));
-      showToast('<span>Repaired — ' + escapeHtml(moved.name) + ' now opens from its new folder.</span>');
+      showToast('<span>Repaired — ' + (extra.length ? (extra.length + 1) + ' files now open from their new folder.' : escapeHtml(moved.name) + ' now opens from its new folder.') + '</span>');
       return res;
     }, function (err) { if (err && err.wrote) mirror(err.wrote); throw err; }); // a partial write still happened for err.wrote
   }
@@ -3477,6 +2770,8 @@
               // Cancelled meanwhile — the add row, or the whole editor (Cancel, Save, a re-render): a late
               // result must not stage into an editor that is no longer on screen (F045).
               if (mySeq !== addSeq || !head.isConnected) return;
+              // A short share link names no site until it is resolved: check the address that would be stored (F089).
+              if (oldSiteMsg(n.url)) { okB.disabled = false; okB.textContent = "Add"; showError('<span>' + oldSiteMsg(n.url) + '</span>', 8000); return; }
               // Use the filename as the chip's label until the next catalog load re-derives it.
               var nm = "";
               try { nm = decodeURIComponent((String(n.url).split(/[?#]/)[0].split("/").pop() || "")).replace(/\.[a-z0-9]+$/i, ""); } catch (e) {}
@@ -3561,12 +2856,13 @@
         naAdd.filter(function (x) { return x.resource === res; }).forEach(function (x) { m[x.model] = (m[x.model] || 0) + x.seen.length; });
         return m;
       }
-      // ONE resource at a time (like wireApprove), each its own all-or-nothing write. So each can carry a
+      // ONE resource at a time, each its own all-or-nothing write. So each can carry a
       // compare-and-swap base — the links THIS editor showed (LINKS is only updated as each resource commits,
       // so linksFor still returns the pre-edit set for the ones not yet written) — and a failure knows exactly
       // which resources landed. The old parallel Promise.all left no record: a partial failure read as total,
       // LINKS stayed behind the sheet, and the retry's base falsely conflicted (F043/F159).
-      var resKeys = Object.keys(byRes), done = {};
+      var resKeys = Object.keys(byRes), done = {}, undoSaved = [];
+      var savedRemovals = resKeys.some(function (res) { return removalsFor(res) > 0; });
       function baseFor(res) {
         var b = {};
         Object.keys(byRes[res] || {}).forEach(function (model) { b[model] = linksFor(model, res).map(function (l) { return l.url; }); });
@@ -3581,11 +2877,13 @@
       }
       resKeys.reduce(function (chain, res) {
         return chain.then(function () {
+          var rec = undoRecord(g.fam, g.prod, res, byRes[res], baseFor(res));
           return postWire(g.fam, g.prod, res, byRes[res], { expectRemoved: removalsFor(res), expectRemovedByModel: removalsByModelFor(res), base: baseFor(res) })
-            .then(function () { applyRes(res); done[res] = 1; });
+            .then(function () { undoSaved.push(rec); applyRes(res); done[res] = 1; });
         });
       }, Promise.resolve()).then(function () {
-        toastSaved('Saved changes for ' + escapeHtml(g.prod) + '.');
+        if (savedRemovals) removeUndoToast('Saved changes for ' + escapeHtml(g.prod) + '.', undoSaved, function () { if (grp.isConnected && !grp.classList.contains("has-staged")) renderCovGroup(grp, g, models, N); });
+        else toastSaved('Saved changes for ' + escapeHtml(g.prod) + '.');
         renderCovGroup(grp, g, models, N);
         focusGroupEdit();
         refreshCovStats(); // keep the top summary %/bars in sync with the optimistic LINKS change
@@ -3597,13 +2895,23 @@
         dels = dels.filter(keep); adds = adds.filter(keep); naAdd = naAdd.filter(keep); naUndo = naUndo.filter(keep);
         var lead = landed.length ? 'Saved ' + escapeHtml(landed.join(", ")) + ', but couldn’t save the rest' : 'Couldn’t save';
         var conflict = isConflict(err);
+        // An expired session: the sticky prompt already says what to do, Save again would fail the same way, and so would a re-read (F061).
+        if (err && err.code === "session_expired") {
+          if (landed.length) showError('<span>' + lead + ' (' + pmErr(err) + ').</span>', 9000);
+          refreshCovStats(); paint();
+          return;
+        }
         if (conflict) { /* told once the re-read below settles (F120) */ }
+        // A shrink-guard refusal: the server's "Reload and try again" would throw away the staged edits this editor keeps
+        // (it re-reads the catalog below) — say what is true (F062). A duplicate row keeps the server's own next step.
+        else if (err && err.status === 409 && err.code === "would_shrink") showError('<span>' + lead + ' — the links changed since you opened the editor. Your changes are still staged over the current links: check them and Save again.</span>', 15000);
         else if (err && err.status === 409) showError('<span>' + (landed.length ? lead + '. ' : '') + escapeHtml(String(err.message)) + '</span>', 15000);
+        else if (err && err.code === "old_site") showError('<span>' + lead + ': ' + escapeHtml(String(err.message)) + ' Remove that link, then save.</span>', 15000); // saving again cannot help (F089)
         else showError('<span>' + lead + ' (' + pmErr(err) + '). Your changes are still staged — Save again to finish.</span>', 9000);
         refreshCovStats();
         // Rebuild from the sheet as it is now, keeping the staged edits: the next Save's base is current.
-        loadCatalog({ fresh: true }).then(function (ok) {
-          if (conflict) conflictToast(ok, lead + ' — another PM changed it since you opened the editor. Your changes are still staged over the current links: check them and Save again.', lead + ' — another PM changed it since you opened the editor. Your changes are still staged.');
+        loadCatalog({ fresh: true, reportsFailure: conflict }).then(function (ok) {
+          if (conflict) conflictToast(ok, lead + ' — another PM changed it since you opened the editor. Your changes are still staged over the current links: check them and Save again.', lead + ' — another PM changed it since you opened the editor. Note your staged changes first: a reload drops them.');
           refreshCovStats(); paint();
         });
       });
@@ -3808,7 +3116,7 @@
           return ftpMark("remove", x);
         }, function (e) {
           if (!isConflict(e)) throw e;
-          loadCatalog({ fresh: true }).then(function (ok) { conflictToast(ok, 'Another PM changed ' + escapeHtml(x.resource) + ' on ' + escapeHtml(x.model) + ' since this page loaded, so nothing was removed. The page now has the current links — click Remove again.', 'Another PM changed ' + escapeHtml(x.resource) + ' on ' + escapeHtml(x.model) + ' since this page loaded, so nothing was removed.'); });
+          loadCatalog({ fresh: true, reportsFailure: true }).then(function (ok) { conflictToast(ok, 'Another PM changed ' + escapeHtml(x.resource) + ' on ' + escapeHtml(x.model) + ' since this page loaded, so nothing was removed. The page now has the current links — click Remove again.', 'Another PM changed ' + escapeHtml(x.resource) + ' on ' + escapeHtml(x.model) + ' since this page loaded, so nothing was removed.'); });
           return { cancelled: true, conflict: true }; // the row stays, like a cancel
         });
       });
@@ -3881,9 +3189,10 @@
   }
   // The red count badge next to "Files to place": how many suggestions await review. Hidden at 0 so a
   // clean inbox shows no symbol; visible (red) when there's work, so it's obvious to go check.
+  var TODO_UNITS = { "todo-issues": ["link issue", "link issues"], "todo-empty": ["empty folder", "empty folders"], "todo-review": ["link to review", "links to review"], "todo-repaired": ["repaired link", "repaired links"], "todo-search": ["search", "searches"], "todo-reports": ["report", "reports"], "todo-fill": ["file to add", "files to add"] };
   function setFtpBadge(box, n) {
     var b = box && box.querySelector(".ftp-badge"); if (!b) return;
-    if (n > 0) { b.textContent = String(n); b.hidden = false; b.setAttribute("aria-label", n + " file" + (n === 1 ? "" : "s") + " to review"); }
+    if (n > 0) { b.textContent = String(n); b.hidden = false; var unit = TODO_UNITS[(box.className.match(/todo-[a-z]+/) || [])[0]] || ["file to review", "files to review"]; b.setAttribute("aria-label", n + " " + unit[n === 1 ? 0 : 1]); } // what THIS tile counts (F009)
     else { b.textContent = ""; b.hidden = true; b.removeAttribute("aria-label"); }
     if (box._onCount) box._onCount(n); // report to the To-do container (hide the box + the whole inbox when empty)
   }
@@ -4221,6 +3530,18 @@
   function demandLocalDone() { try { var a = JSON.parse(localStorage.getItem("pf-demand-done") || "[]"); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
   function demandDismissed() { return demandLocalDone().map(normMissQuery).concat(RUNTIME_HANDLED); }
   function demandIsDone(q) { return demandDismissed().indexOf(normMissQuery(q)) !== -1; }
+  // Undo of a miss marked handled (decision 12a, F049): the verdict is team-wide, so the undo reaches the server too, after
+  // the dismissal's own write has settled. A failed undo says so, and the query stays handled rather than half-undone.
+  var _demandWrite = Promise.resolve();
+  function demandUndo(q, reload) {
+    function setLocal() {
+      try { localStorage.setItem("pf-demand-done", JSON.stringify(demandLocalDone().filter(function (x) { return x !== q; }))); } catch (e) {}
+      var n = normMissQuery(q); RUNTIME_HANDLED = RUNTIME_HANDLED.filter(function (x) { return x !== n; });
+    }
+    _demandWrite.then(function () { return apiFetch("/api/aliases", { method: "POST", body: { action: "undismiss-miss", query: q } }); })
+      .then(function () { setLocal(); reload(); })
+      .catch(function (e) { showError('<span>Couldn’t undo — “' + escapeHtml(q) + '” stays handled. ' + pmErr(e) + '</span>', 7000); });
+  }
   function demandMarkDone(q) {
     var a = demandLocalDone(); if (a.indexOf(q) === -1) a.unshift(q);
     try { localStorage.setItem("pf-demand-done", JSON.stringify(a.slice(0, 200))); } catch (e) {}
@@ -4228,7 +3549,7 @@
     // Share the verdict (POST /api/aliases {action:"dismiss-miss"}). The row is already gone locally; if
     // this fails the PM must know it is hidden here only, or a colleague re-does the same triage tomorrow.
     if (!window.PF_getApiToken) return;
-    apiFetch("/api/aliases", { method: "POST", body: { action: "dismiss-miss", query: q } })
+    _demandWrite = apiFetch("/api/aliases", { method: "POST", body: { action: "dismiss-miss", query: q } })
       .catch(function () { showError("<span>Marked handled in this browser only — couldn’t save it for the team. It will show again for others.</span>", 6000); });
   }
   // Does the EXACT search pass answer this query now (aliases included)? A closest-match row leaves To do once it does (F145).
@@ -4276,7 +3597,7 @@
           if (serverHealthRepaired[key]) items.push({ prio: 3, tag: "Repaired", cls: "ok", model: mm.name, resource: r.name, note: serverHealthRepaired[key].detail });
           var hs = healthStatusFor(mm.name, r.name);
           if (hs === "broken") items.push({ prio: 0, tag: "Link issue", cls: "bad", model: mm.name, resource: r.name });
-          else if (hs === "empty") items.push({ prio: 1, tag: "Work in progress", cls: "warn", model: mm.name, resource: r.name });
+          else if (hs === "empty") items.push({ prio: 1, tag: "Empty folder", cls: "warn", model: mm.name, resource: r.name });
           else if (usableLinked(mm.name, r.name) && resIsStale(mm.name, r.name)) items.push({ prio: 2, tag: "Review", cls: "warn", model: mm.name, resource: r.name, note: resUpdatedLabel(mm.name, r.name).toLowerCase() });
         });
       });
@@ -4330,7 +3651,7 @@
       // or the inbox never reaches zero (F199, owner decision 2026-10-07). They still keep the box visible.
       var total = counts.issues + counts.empty + counts.place + counts.sort + counts.search + counts.reports;
       var soft = counts.review + counts.fill;
-      // Keep the box open when a tile FAILED to load, even at total 0 — otherwise a failed /api/unsorted,
+      // Keep the box open when a tile FAILED to load, even at total 0 — otherwise a failed orphan-folder read,
       // /api/placements, or /api/usage-insights leaves the inbox looking empty while work is actually unknown.
       var anyErr = !!(errored.issues || errored.place || errored.sort || errored.search || errored.reports);
       box.hidden = total === 0 && soft === 0 && !anyErr;
@@ -4404,7 +3725,7 @@
           },
             function (e) {
               btn.disabled = false; btn.textContent = "Repair";
-              if (isConflict(e)) { loadCatalog({ fresh: true }).then(function (ok) { conflictToast(ok, 'Another PM changed this resource since this page loaded, so nothing was saved. The page now has the current links — click Repair again.', 'Another PM changed this resource since this page loaded, so nothing was saved.'); }); return; }
+              if (isConflict(e)) { loadCatalog({ fresh: true, reportsFailure: true }).then(function (ok) { conflictToast(ok, 'Another PM changed this resource since this page loaded, so nothing was saved. The page now has the current links — click Repair again.', 'Another PM changed this resource since this page loaded, so nothing was saved.'); }); return; }
               showError('<span>Couldn’t repair that link (' + pmErr(e) + ').</span>', 7000);
             });
         });
@@ -4546,6 +3867,9 @@
   // the toolbar control's elements.
   function runLinkCheck(btn, statusEl, onDone) {
     if (!window.PF_getToken) { showError('<span>Please sign in again.</span>'); return; }
+    // A health check asks Graph afresh: a success memoized earlier in the session made a deleted file read OK, and that
+    // newer local result hid the nightly run's "broken" (F005).
+    wireResolveMemoClear();
     var items = collectWiredResources();
     if (!items.length) { showToast('<span>No links yet — nothing to check.</span>'); return; }
     // Save/restore innerHTML, not textContent — these buttons hold an SVG icon + a text span, and
@@ -4630,8 +3954,13 @@
     if (!m.closest) li.querySelector(".wl-req").addEventListener("click", function () { openSearchRequest(m.query); });
     li.querySelector(".wl-dismiss").addEventListener("click", function () {
       demandMarkDone(m.query);
-      var ul = li.parentNode; li.remove();
+      var ul = li.parentNode, near = li.nextElementSibling || li.previousElementSibling; li.remove();
       onCount(ul ? ul.querySelectorAll(".wl-demand").length : 0); // updates the box badge + hides it when empty
+      showToast(svg(ICONS.check) + '<span>Marked “' + escapeHtml(m.query) + '” handled.</span>', 8000, { label: "Undo", onClick: function () { demandUndo(m.query, function () { loadTodoDemand(searchBox, onCount); }); } });
+      // The row and its focus are gone: stay in the list, or on the Undo when the list is empty (F049).
+      var nextFocus = near && near.querySelector("button");
+      if (!nextFocus) { var toasts = document.querySelectorAll(".toast button"); nextFocus = toasts[toasts.length - 1]; }
+      if (nextFocus) nextFocus.focus();
     });
   }
   // Inline "point this search at a product" picker — a product dropdown (not free text). Reuses saveAlias
@@ -4677,13 +4006,13 @@
   // and model from its name, the PM checks the plan (products, type, models per file) and Approves. Approve writes
   // the files through the normal /api/wire-links path — and, per cell it touches, drops the links that still
   // point at the sites the collateral left (PF.isLegacyUrl), so one folder = one product fully migrated.
-  // The old per-type folder tool (wirePanel) and the "one folder for every family" matcher are no longer offered
-  // on the page; their code stays until the migration is through.
+  // It replaced the old per-type folder tool and the "one folder for every family" matcher (off the page 2026-10-07,
+  // deleted 2026-10-28 once the migration was through).
   function productFolderPanel(bare) {
     var box = document.createElement("div"); box.className = "wire pfold";
     box.innerHTML =
       (bare ? '' : '<div class="wire-head" role="heading" aria-level="2">' + svg(ICONS.folder) + '<span>Link a product folder</span></div>') +
-      '<p class="wire-lead">Paste the link of a <b>product folder</b> on the Product Management site. Every file in it is sorted by type and model from its name — check the plan, fix anything, then Approve. Approving also removes that product’s links that still point at the old Marketing site.</p>' +
+      '<p class="wire-lead">Paste the link of a <b>product folder</b> on the Product Management site. Every file in it is sorted by type and model from its name — check the plan, fix anything, then Approve.</p>' +
       '<p class="wire-steps">Paste the folder link&nbsp;→&nbsp;Preview&nbsp;→&nbsp;check products, types and models&nbsp;→&nbsp;Approve.</p>' +
       '<div class="wire-form">' +
         '<input class="wire-input" id="pfoldUrl" type="url" aria-label="SharePoint folder link" placeholder="Paste the product folder link" value="https://grumbleton.example/sites/Lair/Shared%20Documents/Product%20Folders/02%20Gemtumbler">' +
@@ -4700,7 +4029,7 @@
           '</ol>' +
         '</div>' +
       '</details>' +
-      '<div class="wire-result" id="pfoldResult"></div>';
+      '<div class="wire-result" id="pfoldResult" role="status"></div>'; // every Preview outcome is heard (F048)
     box.querySelector("#pfoldPreview").addEventListener("click", function () { pfoldPreview(box); });
     box.querySelector("#pfoldUrl").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); pfoldPreview(box); } });
     return box;
@@ -4909,7 +4238,7 @@
       if (dry.removedList.length > PFOLD_LIST_MAX) body.push("\u2026and " + (dry.removedList.length - PFOLD_LIST_MAX) + " more.");
     }
     if (keptN) body.push("Kept as they are: " + keptN + " file" + (keptN === 1 ? "" : "s") + " already linked.");
-    body.push("The files stay in SharePoint \u2014 only the links change. Undo = the nightly backup sheet.");
+    body.push("The files stay in SharePoint \u2014 only the links change. You can undo right after saving; after that, ask the Hub owner to restore them from the nightly backup.");
     pfConfirm({
       title: "Approve " + (st.label || "this folder") + "?",
       body: body,
@@ -4920,7 +4249,7 @@
       if (!window.PF_getApiToken) { showError('<span>Please sign in again.</span>'); return; }
       var done = busyButton(btn, "Saving…");
       _pfoldSaving = true; pfoldLock(box, true); // F112: leaving mid-chain would leave a partial migration — the page asks first
-      var wrote = 0, removed = 0, added = 0, failed = [], missed = [];
+      var wrote = 0, removed = 0, added = 0, failed = [], missed = [], undoSaved = [];
       return loadCatalog({ fresh: true }).then(function () {
         // F109: re-seed the rows from the sheet as it is NOW (keeping the PM's edits), so a placement a colleague made
         // since the Preview is kept, not removed; and if the removals still grew past the list the PM confirmed, write
@@ -4946,16 +4275,22 @@
         return groups.reduce(function (chain, g, gi) {
           return chain.then(function () {
             btn.textContent = "Saving " + (gi + 1) + " of " + groups.length + "…";
+            var rec = undoRecord(g.p.family, g.p.name, g.r, g.assignments, g.base);
             return postWire(g.p.family, g.p.name, g.r, g.assignments, { expectRemoved: g.expectRemoved, expectRemovedByModel: Object.keys(g.byModel).length ? g.byModel : undefined, base: g.base, allowMissed: true }).then(function (res) {
               Object.keys(g.finals).forEach(function (m) { if (!(res && res.missed && res.missed.indexOf(m) !== -1)) { setLinks(m + "::" + g.r, g.finals[m]); clearHealthFor(m + "::" + g.r); } });
               wrote += (res && res.updated) || Object.keys(g.assignments).length; removed += g.expectRemoved; added += g.added;
-              if (res && res.missed && res.missed.length) res.missed.forEach(function (m) { missed.push(m + " · " + g.r); });
+              if (res && res.missed && res.missed.length) res.missed.forEach(function (m) { missed.push(m + " · " + g.r); delete rec.after[m]; });
+              undoSaved.push(rec);
             }, function (e) { failed.push(g.p.name + " · " + g.r + " (" + pmErr(e) + ")"); });
           });
         }, Promise.resolve()).then(function () {
           refreshCovStats(); if (_todoIssuesRepaint) _todoIssuesRepaint();
           if (failed.length) showError('<span>Saved ' + wrote + ' row' + (wrote === 1 ? '' : 's') + ', but ' + failed.length + ' group' + (failed.length === 1 ? '' : 's') + ' failed: ' + escapeHtml(failed.join("; ")) + '. Preview again to retry those.</span>', 15000);
-          else toastSaved('Added ' + added + ' link' + (added === 1 ? '' : 's') + (removed ? ' and removed ' + removed : '') + ' for ' + escapeHtml(pickedProducts.map(function (p) { return p.name; }).join(", ")) + '.');
+          else {
+            var savedMsg = 'Added ' + added + ' link' + (added === 1 ? '' : 's') + (removed ? ' and removed ' + removed : '') + ' for ' + escapeHtml(pickedProducts.map(function (p) { return p.name; }).join(", ")) + '.';
+            if (removed) removeUndoToast(savedMsg, undoSaved, function () { if (box.isConnected && !_pfoldSaving) { st.rows = null; pfoldRender(box); } });
+            else toastSaved(savedMsg);
+          }
           if (missed.length) showToast('<span>No sheet row for ' + escapeHtml(missed.slice(0, 6).join(", ")) + (missed.length > 6 ? ' (+' + (missed.length - 6) + ')' : '') + ' — add the row in the Product Family Tree, then Preview again.</span>', 12000);
           pfoldLock(box, false); // before the re-render, so the summary can take focus
           if (!failed.length) st.rows = null; // all saved: re-seed from the sheet; a failed group keeps the edits to retry (F035)
@@ -4972,8 +4307,7 @@
     var uid = "af" + (++_afSeq); // unique tab/panel ids so multiple instances don't collide
     var modes = [
       { key: "doc", label: "One file → many products", build: function () { return docPlacePanel(true); } },
-      // The one folder method (owner decision 2026-10-07): the per-type folder tool (wirePanel) and the "one folder
-      // for every family" matcher are no longer offered — the product folders hold every type together.
+      // The one folder method (owner decision 2026-10-07): the product folders hold every type together.
       { key: "pfolder", label: "Link a product folder", build: function () { return productFolderPanel(true); } }
     ];
     box.innerHTML =
@@ -5116,8 +4450,7 @@
 
     var matrix = document.createElement("div"); matrix.className = "cov-matrix";
     // Rebuild ONLY the matrix (recomputing coverage live) — used by the "incomplete only" toggle so it
-    // no longer tears down the whole view (which re-created the wire tool and refetched /api/unsorted,
-    // discarding any in-progress drag work).
+    // no longer tears down the whole view (which refetched the pile and discarded work in progress).
     function fillMatrix(pre) { // `pre`: stats the caller already computed (the initial render); omitted → recompute live
       matrix.innerHTML = "";
       var st = pre || coverageStats(), anyShown = false;
@@ -5181,7 +4514,13 @@
   }
   // Where the step box goes for a lit area r (viewport px): beside a tall area; else below, above, beside (a zoomed
   // desktop with no room above or below), and on a phone where nothing fits, docked at the bottom of the screen.
+  // Whatever the rule picks, the box stays on screen (F038/F037): it used to follow a lit area that scrolled or reflowed
+  // off-screen, taking Next, Back and Skip with it.
   function tourPlace(r, pw, ph, vw, vh) {
+    var at = tourPlaceRaw(r, pw, ph, vw, vh);
+    return { top: Math.max(12, Math.min(at.top, vh - ph - 12)), left: Math.max(16, Math.min(at.left, vw - pw - 16)) };
+  }
+  function tourPlaceRaw(r, pw, ph, vw, vh) {
     var h = r.bottom - r.top, sideR = r.right + 20, sideL = r.left - pw - 20;
     var side = sideR + pw <= vw - 16 ? sideR : (sideL >= 16 ? sideL : null);
     function sideTop(mid) { return Math.min(Math.max(80, mid - ph / 2), vh - ph - 12); }
@@ -5216,7 +4555,7 @@
       { prep: prodOpen, el: function () { return document.querySelector(".col-models"); }, tap: function () { return byKey(mk); },
         t: "Each product comes in models", p: "Pick the model you need." },
       p.hasShared ? { prep: modelOpen, el: function () { return document.querySelector(".col-product"); },
-        t: "Files every model shares", p: "The top card holds the files that are the same for the whole product, like the flyer and the warranty." } : null,
+        t: "Files every model shares", p: window.PF.tourSharedSentence(p.sharedTypes) } : null,
       { prep: modelOpen, el: function () { return document.querySelector(".col-model"); },
         t: "Only what’s different", p: "This card holds the files for the model you picked. Click any file to preview it." },
       { prep: modelOpen, el: function () { return onCard(".res-pin"); },
@@ -5253,7 +4592,7 @@
     window.scrollTo(0, snap.y);
   }
   function startTour(opts) {
-    if (tourState) return;
+    if (tourState || (lb && !lb.hidden)) return; // never on top of an open preview (F039)
     var path = window.PF.pickTourPath(CATALOG, linksFor, naFor, OTHER_COLLATERAL);
     if (!path) return;
     tourMarkDone(); // a reload mid-tour does not start it again; the ? button always can
@@ -5273,9 +4612,17 @@
     // Decision 5a (F105): where the rep was, so a ? replay puts them back at the end. The tour's own navigation
     // replaces history entries instead of adding them (syncHash checks tourState), so Back still leaves cleanly.
     var snap = { hash: location.hash || "", view: view, fams: JSON.stringify(openFams), y: window.scrollY || 0 };
+    // The tour owns ONE history entry and replaces inside it (syncHash keeps its state), so the entry the rep was on
+    // stays one Back away: replacing that entry made the first Back after the welcome tour leave the Hub (F083). Back
+    // during the tour lands on the rep's own entry and ends the tour (onPop).
+    try { history.pushState({ pfTour: 1 }, "", location.href); } catch (e) {}
     // Each step is read out through the page's live region (F027/F139): focus moving from one Next button to the
     // next inside the open dialog never re-reads it, so a screen reader heard only "Next, button".
-    function say(t, p) { if (srAnnounce) srAnnounce.textContent = t + (/[.?!]$/.test(t) ? " " : ". ") + p; }
+    // Inside the box, and it survives every repaint: WebKit hides what is outside an aria-modal dialog, live regions included (F070).
+    var popBody = document.createElement("div"); popBody.className = "tour-content";
+    var popLive = document.createElement("div"); popLive.className = "sr-only"; popLive.setAttribute("aria-live", "polite");
+    pop.appendChild(popBody); pop.appendChild(popLive);
+    function say(t, p) { popLive.textContent = t + (/[.?!]$/.test(t) ? " " : ". ") + p; }
     document.body.classList.remove("nav-hidden"); // a phone header collapsed before the tour started comes back now (F006)
     // The step as shown: after the tap on a two-part step (Share), its "then" text and lit area, with nothing left to tap.
     function cur() { var s = steps[st.i]; return st.phase && s.then ? { t: s.t, p: s.then.p, el: s.then.el, leave: s.leave } : s; }
@@ -5306,9 +4653,18 @@
     // Scroll and resize: one place per frame, with no tween, so the frame moves with the card it lights instead of
     // trailing it by a quarter second (F041/F106). Nothing moves while a step change is under way.
     var raf = 0;
+    // The frame, the box and the tap ring glide as one between steps; the box and ring used to jump to the new spot while
+    // the frame was still travelling there (F040). Never on scroll or resize.
+    function setGlide(on) { [spot, pop, ring].forEach(function (e) { e.classList.toggle("glide", !!on); }); }
     function placeSoon() {
       if (raf || st.moving) return;
-      raf = requestAnimationFrame(function () { raf = 0; if (st.moving) return; spot.classList.remove("glide"); placeNow(); });
+      raf = requestAnimationFrame(function () { raf = 0; if (st.moving) return; setGlide(false); placeNow(); });
+    }
+    // A resize (a phone rotating, the iOS toolbar) can reflow the lit area off-screen: scroll it back, as the step did.
+    function onResize() {
+      var r = !st.notice && !st.moving && rectOf(st.lit);
+      if (r && (r.bottom < 0 || r.top > innerHeight)) st.lit[0].scrollIntoView({ block: r.bottom - r.top > innerHeight * 0.45 ? "start" : "center" });
+      placeSoon();
     }
     function placeNow() {
       if (tourState !== st) return;
@@ -5340,7 +4696,7 @@
     function paint(s, n) {
       if (s.welcome) {
         pop.className = "tour-pop welcome";
-        pop.innerHTML = '<div class="tour-mark"></div><div class="tour-hi">' + escapeHtml(first ? "Hi " + first : "Hi there") + '</div>' +
+        popBody.innerHTML = '<div class="tour-mark"></div><div class="tour-hi">' + escapeHtml(first ? "Hi " + first : "Hi there") + '</div>' +
           '<h2 class="tour-title" id="tourTitle">Welcome to the Grumbleton & Sons Hub!</h2>' +
           '<p class="tour-text" id="tourBody">Every product’s spec sheets, flyers, renders and more, always the latest version, straight from SharePoint.</p>' +
           '<p class="tour-text tour-lead">Let’s take a one-minute look around.</p>' +
@@ -5350,12 +4706,12 @@
       }
       pop.className = "tour-pop";
       var dots = ""; for (var k = 1; k <= N; k++) dots += '<i' + (k === n ? ' class="on"' : '') + '></i>';
-      pop.innerHTML = '<div class="tour-step">Step ' + n + ' of ' + N + '</div><div class="tour-dots" aria-hidden="true">' + dots + '</div>' +
+      popBody.innerHTML = '<div class="tour-step">Step ' + n + ' of ' + N + '</div><div class="tour-dots" aria-hidden="true">' + dots + '</div>' +
         '<h2 class="tour-title" id="tourTitle">' + escapeHtml(s.t) + '</h2><p class="tour-text" id="tourBody">' + escapeHtml(s.p) + '</p>' +
         '<div class="tour-foot">' + (n < N ? '<button type="button" class="tour-skip">Skip tour</button>' : '<span class="tour-gap"></span>') +
         (n > 1 ? '<button type="button" class="wire-btn tour-back">Back</button>' : '') +
         '<button type="button" class="wire-btn primary tour-next">' + (n === N ? "Done" : "Next") + '</button></div>';
-      say(s.t, s.p);
+      say("Step " + n + " of " + N + ". " + s.t, s.p);
     }
     // A keyboard user gets the green button, ring and all. Anyone else gets the box itself: Chromium keeps :focus-visible on
     // a button script focused, so for a mouse user Next wore a dark double ring the whole tour (F090). Enter and screen
@@ -5382,8 +4738,8 @@
         }
         if (s.top) window.scrollTo(0, 0);
         else if (st.lit.length) { var r = rectOf(st.lit); st.lit[0].scrollIntoView({ block: r.bottom - r.top > innerHeight * 0.45 ? "start" : "center" }); } // instant, not smooth: the box is placed right after
-        spot.classList.toggle("glide", !spot.hidden); // a frame already on screen glides to its next area
-        paint(s, n); placeNow(); focusNext();
+        var glide = !spot.hidden; // a frame already on screen glides to its next area, the box and ring with it
+        paint(s, n); setGlide(glide); placeNow(); focusNext();
       });
     }
     function skipped() {
@@ -5392,9 +4748,9 @@
       if (!btn || !btn.getClientRects().length) return end();
       ++st.seq; st.notice = true; ring.hidden = true; window.scrollTo(0, 0); st.lit = [btn];
       pop.className = "tour-pop notice";
-      pop.innerHTML = '<h2 class="tour-title" id="tourTitle">No problem</h2><p class="tour-text" id="tourBody">You can take the tour any time from this button.</p>' +
+      popBody.innerHTML = '<h2 class="tour-title" id="tourTitle">No problem</h2><p class="tour-text" id="tourBody">You can take the tour any time from this button.</p>' +
         '<div class="tour-foot"><span class="tour-gap"></span><button type="button" class="wire-btn primary tour-next">Got it</button></div>';
-      spot.classList.remove("glide"); placeNow(); focusNext(); say("No problem", "You can take the tour any time from this button.");
+      setGlide(false); placeNow(); focusNext(); say("No problem", "You can take the tour any time from this button.");
     }
     function end(keepView) {
       if (tourState !== st) return;
@@ -5402,8 +4758,8 @@
       tourState = null;
       [block, spot, ring, pop].forEach(function (e) { e.remove(); });
       if (raf) cancelAnimationFrame(raf);
-      window.removeEventListener("resize", placeSoon); window.removeEventListener("scroll", placeSoon, true); document.removeEventListener("keydown", onKey, true);
-      window.removeEventListener("hashchange", onHash);
+      window.removeEventListener("resize", onResize); window.removeEventListener("scroll", placeSoon, true); document.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("hashchange", onHash); window.removeEventListener("popstate", onPop);
       if (opts && opts.from && !keepView) restoreView(snap); // a ? replay ends where the rep was (decision 5a); the first-run tour stays on its model
       // Back to whatever opened the tour; an auto-started tour was opened by nothing (focus sat on <body>), so
       // Done lands on the ? button that replays it, as Skip does (H001, audit 2026-10-26).
@@ -5453,9 +4809,11 @@
       if (lb && !lb.hidden) { end(true); showToast('<span>Tour stopped — you can take it any time from the <b>?</b> button.</span>'); return; }
       if (st.notice) placeNow(); else show(st.i, 1);
     }
-    window.addEventListener("resize", placeSoon); window.addEventListener("scroll", placeSoon, true);
+    // Back left the tour's entry (F083): the rep is on their own page again — end there (a ? replay restores its view).
+    function onPop() { if (tourState !== st) return; if (!(history.state && history.state.pfTour)) end(); }
+    window.addEventListener("resize", onResize); window.addEventListener("scroll", placeSoon, true);
     document.addEventListener("keydown", onKey, true);
-    window.addEventListener("hashchange", onHash);
+    window.addEventListener("hashchange", onHash); window.addEventListener("popstate", onPop);
     show(0, 1);
   }
 
@@ -5476,7 +4834,7 @@
         '<p class="wire-lead">Product Hub is a friendly front door to every product’s resources. Every link points to the real file in SharePoint — nothing is copied here. The <b>Product Family Tree</b> Smartsheet is the source of truth: edit it and the site updates within about a minute.</p>' +
 
         '<h2 class="pmg-h">What salespeople see</h2>' +
-        '<p class="pmg-p">New staff get a one-minute <b>welcome tour</b> on their first visit; the <b>?</b> button in the top bar replays it. On a model, <b>Select</b> picks which files <b>Share</b> takes — <b>Internal</b> copies Hub links (they open only for Grumbleton sign-ins), <b>External</b> sends or downloads the files for a customer. In a multi-file preview, <b>Download (N)</b> offers all the files, the one on screen, or a pick.</p>' +
+        '<p class="pmg-p">New staff get a one-minute <b>welcome tour</b> on their first visit; the <b>?</b> button in the top bar replays it. On a model, <b>Select</b> picks which files <b>Share</b> takes — <b>Internal</b> copies Hub links (they open only for Grumbleton sign-ins), <b>External</b> sends or downloads the files for a customer. In a multi-file preview, <b>Download (N)</b> offers all the files, the one on screen, or a pick. A file that isn’t linked shows <b>Not in the Hub yet · Request this</b>; requests reach you through the intake form and <b>Metrics</b>.</p>' +
         '<h2 class="pmg-h">The four tabs</h2>' +
         '<ul class="pmg-list">' +
           '<li><b>Find</b> — what everyone sees: browse to a product and open its files.</li>' +
@@ -5486,7 +4844,7 @@
         '</ul>' +
 
         '<h2 class="pmg-h">Add links to a product</h2>' +
-        '<p class="pmg-p">On the <b>Progress</b> tab, open <b>Add files</b> and pick <b>Link a product folder</b> to sort a product folder’s files onto models by type and model from their names (new files in that folder are suggested in <b>To Do › New on SharePoint</b> for you to approve), or click <b>Edit</b> on any product section to add or remove individual links. Each resource stays <b>Work in progress</b> until it has a link that opens to real files. Files that match no model are parked in the <b>Unsorted pile</b> — sort them from <b>To Do › Sort the pile</b>.</p>' +
+        '<p class="pmg-p">On the <b>Progress</b> tab, open <b>Add files</b> and pick <b>Link a product folder</b> to sort a product folder’s files onto models by type and model from their names (new files in that folder are suggested in <b>To Do › New on SharePoint</b> for you to approve), or click <b>Edit</b> on any product section to add or remove individual links. Each resource shows as <b>Not in the Hub yet</b> until it has a link that opens to real files. Files Link a product folder can’t place stay unticked and aren’t linked; the nightly <b>New on SharePoint</b> scan offers them again.</p>' +
         '<p class="pmg-p">On <b>Find</b>, a product shows <b>two cards</b>: the top card lists the files <b>every model</b> of the product shares (one flyer, one spec sheet…), the card under it lists only what is <b>different for the selected model</b> (its renders, in-store photos, a model-specific instruction sheet). The Hub decides this from the links themselves — a file linked on every model is a product document — so to make a document product-wide, link the same file on every model (approving the product folder does that for shared types).</p>' +
         '<p class="pmg-p">You’ll also see a <b>New on SharePoint</b> list in the To&nbsp;Do box at the top of the Progress tab. Every night the site scans your linked folders for new files it can match to a model and <b>suggests</b> them there. Review each one and <b>Add</b> it or <b>Remove</b> it — nothing goes on the live site until you add it.</p>' +
 
@@ -5501,12 +4859,12 @@
           '<li>Easiest way: find a model like the one you’re adding, select its ' + typeCount + ' rows, copy them, then insert them as new rows.</li>' +
           '<li>On <b>every</b> new row fill <b>Category</b>, <b>Family</b>, <b>Product</b>, <b>Models/Variants</b>, and <b>RSS</b> (the resource type). Repeat Category / Family / Product on all ' + typeCount + ' rows — don’t leave them blank. A type that does not apply to the model (most models have no Graphics Dielines) gets <b>N/A</b> in its URL cell, or use <b>Mark N/A</b> in the app — it then disappears from that model and from its coverage count.</li>' +
           '<li>Leave <b>SP Folder URL</b> empty for now — you’ll add the links from the Progress tab.</li>' +
-          '<li>Save. The product appears on the site within about a minute, with every resource marked <b>Work in progress</b> until you link it.</li>' +
+          '<li>Save. The product appears on the site within about a minute, with every resource shown as <b>Not in the Hub yet</b> until you link it.</li>' +
         '</ol>' +
         '<p class="pmg-note">Tips: spell each resource type exactly as above (' + typeList + ') so the app recognizes it. A brand-new <b>Family</b> or <b>Category</b> just means typing a new name in that column. To add a single variant to an existing product, copy just that product’s ' + typeCount + '-row block and rename the model.</p>' +
 
         '<h2 class="pmg-h">Check that every link works</h2>' +
-        '<p class="pmg-p">On the <b>Progress</b> tab, click <b>Check links</b> (in the coverage toolbar, just above the grid) to test every link. A link that won’t open — moved, deleted, or no access — is flagged as a <b>Link issue</b> (the red flag salespeople see on the Find tab); a folder with no files yet stays <b>Work in progress</b>. Neither counts toward a model’s progress. This check also runs <b>automatically every day</b>, so those flags show for everyone even when no one runs it — run it from Progress when you want to check right now. A file that was <b>renamed</b> on SharePoint is re-linked overnight by itself and shows as <b>Repaired</b> in To do for a day; a file that <b>moved</b> to another folder shows as <b>Moved</b> with a <b>Repair</b> button.</p>' +
+        '<p class="pmg-p">On the <b>Progress</b> tab, click <b>Check links</b> (in the coverage toolbar, just above the grid) to test every link. A link that won’t open — moved, deleted, or no access — is flagged as a <b>Link issue</b> (the red flag salespeople see on the Find tab); a folder with no files yet still counts as not linked. Neither counts toward a model’s progress. This check also runs <b>automatically every day</b>, so those flags show for everyone even when no one runs it — run it from Progress when you want to check right now. A file that was <b>renamed</b> on SharePoint is re-linked overnight by itself and shows as <b>Repaired</b> in To do for a day; a file that <b>moved</b> to another folder shows as <b>Moved</b> with a <b>Repair</b> button.</p>' +
         '<p class="pmg-p">Two more states in the grid: a linked resource turns <b>Review</b> once its newest file is over a year old — open it, confirm it’s still current, or replace it. Mark a resource <b>N/A</b> (from a product section’s <b>Edit</b> view) when it genuinely doesn’t apply to that model — it’s then left out of the model’s progress instead of counting as missing.</p>' +
       '</div>';
     return d;
@@ -5521,7 +4879,7 @@
   // "Sheet hygiene": what in the Product Family Tree the app could not read as intended — each row says
   // what to change in the sheet. Rendered on Progress (where PMs work), only when there is something.
   function sheetHygienePanel() {
-    var h = SHEET_HYGIENE, n = h.unknownResourceTypes.length + h.invalidLinks.length + h.dupeModelNames.length + h.strayLinks.length + h.dupeResourceRows.length + h.nestedRows.length + h.orphanRows.length;
+    var h = SHEET_HYGIENE, n = h.unknownResourceTypes.length + h.invalidLinks.length + h.dupeModelNames.length + h.strayLinks.length + h.dupeResourceRows.length + h.nestedRows.length + h.orphanRows.length + h.refusedLinks.length;
     if (!n) return null;
     var box = document.createElement("details"); box.className = "wire orphan-files"; box.open = true;
     function group(title, lead, items, render) {
@@ -5534,6 +4892,8 @@
     box.innerHTML =
       '<summary class="wire-head wire-warn-head">' + svg(ICONS.alert) + '<span>Sheet hygiene</span> <span class="uns-count">' + n + '</span></summary>' +
       '<div class="ui-body">' +
+      group("Links SharePoint refuses to share", 'These files exist, but SharePoint refused their sharing link, so a rep may not be able to open them. Open each one as a rep; if it fails, re-share the file or check the library’s permissions. A row clears itself the night its link works.',
+        h.refusedLinks, function (u) { return '<li class="ui-orphan"><span class="ui-q">' + escapeHtml(u.model) + ' · ' + escapeHtml(u.rss) + '</span><span class="ui-sub">refused ' + (u.days ? u.days + ' day' + (u.days === 1 ? '' : 's') : 'recently') + '</span></li>'; }) +
       group("Unrecognized resource types", 'These rows have an <b>RSS</b> (resource type) value that isn’t one of the recognized types, so they don’t appear anywhere on the site. Fix the spelling in the sheet.',
         h.unknownResourceTypes, function (u) { return '<li class="ui-orphan"><span class="ui-q">' + escapeHtml(u.model || "(no model)") + '</span><span class="ui-sub">unrecognized resource type: “' + escapeHtml(u.rss || "") + '”</span></li>'; }) +
       group("Text where a link should be", 'An <b>SP Folder URL</b> cell holding a note counts as nothing — it isn’t a link and it isn’t N/A, so the resource shows as missing. Paste the file link, or mark the resource N/A.',
@@ -6302,6 +5662,12 @@
         if (!oc) INDEX.push({ lvl: "Family", name: f.name, mono: false, path: [c.name, f.name], trail: c.name });
         f.products.forEach(function (p) {
           if (!oc) INDEX.push({ lvl: "Product", name: p.name, mono: false, path: [c.name, f.name, p.name], trail: c.name + " › " + f.name });
+          // A file every model shares is one row that opens the product card's preview, as What's New does (decision 10a, F077).
+          var split = oc ? null : window.PF.splitProductDocs(p.models, linksFor);
+          if (split) Object.keys(split.shared).forEach(function (type) {
+            if (!p.models.some(function (m) { return usableLinked(m, type); })) return;
+            INDEX.push({ lvl: "Live", name: p.name + " — " + type, mono: false, path: [c.name, f.name, p.name], trail: c.name + " › " + f.name, live: true, url: split.shared[type][0].url, resource: type, sharedRow: f.name + "§" + p.name + "§" + type, extra: p.models.join(" ") });
+          });
           p.models.forEach(function (m) {
             // Include the DECODED model-code words (e.g. "Hoardmaster 3000 G" → "Tall") in the searchable text, so
             // staff searching the attribute the app itself teaches ("tall", "integrated", "wide", "pullout")
@@ -6323,7 +5689,8 @@
               // Only index resources that actually open (skip empty/broken) — matches the What's New strip,
               // so search never advertises a resource that browse would flag as a Link issue. Lead the row
               // label with the MODEL (the distinguishing token), keeping the resource type for matching.
-              if (arr.length && usableLinked(m, r.name)) INDEX.push({ lvl: "Live", name: m + " — " + r.name, mono: false, path: [c.name, f.name, p.name, m], trail: c.name + " › " + f.name + " › " + p.name, live: true, url: arr[0].url, model: m, resource: r.name });
+              if (arr.length && usableLinked(m, r.name)) INDEX.push({ lvl: "Live", name: m + " — " + r.name, mono: false, path: [c.name, f.name, p.name, m], trail: c.name + " › " + f.name + " › " + p.name, live: true, url: arr[0].url, model: m, resource: r.name,
+                sharedOf: (split && split.shared[r.name] && !split.perModel[m][r.name]) ? f.name + "§" + p.name + "§" + r.name : null });
             });
           });
         });
@@ -6401,6 +5768,15 @@
     return p.length ? "#/" + p.map(encodeURIComponent).join("/") : "";
   }
   // Full [category, family, product, model] path for a model name (for resource share links).
+  function findProductPath(prodName) {
+    for (var ci = 0; ci < CATALOG.length; ci++) {
+      var fams = CATALOG[ci].families;
+      for (var fi = 0; fi < fams.length; fi++) {
+        if (fams[fi].products.some(function (p) { return p.name === prodName; })) return [CATALOG[ci].name, fams[fi].name, prodName];
+      }
+    }
+    return null;
+  }
   function findModelPath(modelName) {
     for (var ci = 0; ci < CATALOG.length; ci++) {
       var c = CATALOG[ci];
@@ -6421,6 +5797,13 @@
     if (resource) path = path.concat([resource]);
     return location.origin + location.pathname + location.search + "#/" + path.map(encodeURIComponent).join("/");
   }
+  // A file's key in a Hub link, the segment after the resource (F051): its file name, or its position (1-based) when
+  // the URL names no file (an Office Doc.aspx link). The gallery opens on the file whose key matches (lbStartFile).
+  function galFileKey(url, i) {
+    var seg = ""; try { seg = decodeURIComponent(String(url || "").split("?")[0].split("#")[0].split("/").pop()); } catch (e) {}
+    return /\.[a-z0-9]{2,5}$/i.test(seg) && !/\.aspx$/i.test(seg) ? seg : String(i + 1);
+  }
+  var lbStartFile = null; // set by a Hub link naming a file; read once by the next gallery that opens
   // Model-less deep link to a PRODUCT document (a file every model shares): #/Cat/Fam/Prod/all/Resource.
   // "all" is a reserved segment — applyHash routes it to the product card; no model may be named "all".
   function productResourceShareUrl(path3, resource) {
@@ -6499,13 +5882,14 @@
   function syncHash(dismiss) {
     var target = hashFor(), cur = location.hash || "";
     if (cur === target) return;
+    if (lb && !lb.hidden && _pvHref && location.href === _pvHref) return; // the open preview's address is meant to differ (F085)
     try {
       // During a restore (cold load / back-forward / pasted link) we're REFLECTING state, not navigating —
       // REPLACE the entry, never push. Assigning location.hash pushed a 2nd entry, so normalizing a shared
       // resource link (#/…/M/R, which hashFor can't represent) down to #/…/M created a bounce: Back returned
       // to #/…/M/R, re-ran applyHash, re-opened the preview, and pushed again — trapping the user.
       // The tour's walk replaces too: its steps are not places the rep chose, so they leave no Back entries (decision 5a).
-      if (_restoring || tourState) { history.replaceState(null, "", location.pathname + location.search + (target || "")); }
+      if (_restoring || tourState) { history.replaceState(tourState ? { pfTour: 1 } : null, "", location.pathname + location.search + (target || "")); } // the tour's entry stays the tour's (F083)
       // Belt-and-braces reset. The listener clears the guard when hashchange arrives, but hashchange only
       // fires if the hash ACTUALLY changed — and a browser that normalizes our value back to the current
       // one fires nothing, leaving the flag set to swallow the next GENUINE back/forward. A 0ms timer
@@ -6532,6 +5916,7 @@
     if (p.length < 4) return true;
     return (pr.models || []).indexOf(p[3]) !== -1;
   }
+  var _pmUnconfirmed = false;
   function applyHash() {
     // Back/Forward with a preview open used to re-render the page UNDERNEATH the modal and leave it up —
     // closing it then revealed a view the user never chose. Close it before navigating.
@@ -6551,6 +5936,8 @@
     // refresh re-run applyHash once the catalog is in. (F161)
     if (catalogError && !catalogLoaded && h.indexOf("#/") === 0) { view = "catalog"; render(); syncViewTabs(); return; }
     if (h === "#progress" || h === "#admin" || h === "#metrics" || h === "#styleguide") {
+      // A PM whose access check failed is not a rep: keep the address for the Refresh their toast offers, and no contradicting toast (F063).
+      if (!isPM() && _pmUnconfirmed) { view = "catalog"; clearSearch(); render(); resetScroll(); return; }
       if (!isPM()) { // a non-PM opened a shared PM link — don't just silently bounce them
         view = "catalog"; clearSearch(); render(); resetScroll();
         syncHash(); // drop the rejected hash (replaceState while _restoring) so Back can't re-fire this
@@ -6577,20 +5964,32 @@
       });
       if (parts.length) {
         if (parts[3] === "all") { // #/Cat/Fam/Prod/all/Resource → the product card + the shared file's preview
-          if (!catalogHasPath(parts.slice(0, 3))) {
+          var pAll = parts.slice(0, 3), allMoved = null; // the product may have moved families (F084)
+          if (!catalogHasPath(pAll)) { allMoved = findProductPath(parts[2]); if (allMoved) pAll = allMoved; }
+          if (!catalogHasPath(pAll)) {
             view = "catalog"; sel = { prod: null, model: null }; clearSearch(); render(); resetScroll(); syncHash();
             showToast('<span>That link points to something no longer in the catalog — showing the catalog instead.</span>');
             return;
           }
-          openTo(parts.slice(0, 3));
+          openTo(pAll);
+          if (allMoved) showToast('<span>That product has moved — here it is in its new place.</span>', 6000);
           var sres = parts[4], sarr = curSplit && curSplit.shared[sres];
-          if (Array.isArray(sarr) && sarr.length) { var spb = prodByKey(sel.prod); openResource(sarr, parts[2] + " · " + sres, firstHolder(spb, sres, sarr[0]), { productPath: parts.slice(0, 3) }); }
-          else if (sres) showToast('<span>That document isn’t shared by every model any more — showing the product instead.</span>', 5000);
+          if (Array.isArray(sarr) && sarr.length) { var spb = prodByKey(sel.prod); lbStartFile = parts[5] || null; openResource(sarr, parts[2] + " · " + sres, firstHolder(spb, sres, sarr[0]), { productPath: pAll }); }
+          else if (sres) showToast('<span>That file isn’t shared by every model any more — showing the product instead.</span>', 5000);
           return;
         }
         // A family or product renamed since the link was shared: the MODEL may still exist elsewhere — open it there (F101).
         var p4 = parts.slice(0, 4), movedTo = null;
-        if (!catalogHasPath(p4)) { movedTo = parts[3] ? findModelPath(parts[3]) : null; if (movedTo) p4 = movedTo.slice(0, 4); }
+        if (!catalogHasPath(p4)) { movedTo = parts[3] ? findModelPath(parts[3]) : parts[2] ? findProductPath(parts[2]) : null; if (movedTo) p4 = movedTo.slice(0, 4); }
+        // The deepest part of the link that still exists, rather than a collapsed home (F084).
+        if (!catalogHasPath(p4)) {
+          for (var keep = Math.min(p4.length - 1, 3); keep >= 2; keep--) {
+            if (!catalogHasPath(p4.slice(0, keep))) continue;
+            openTo(p4.slice(0, keep)); syncHash();
+            showToast('<span>That ' + (keep === 3 ? "model" : "product") + ' isn’t in the catalog any more — here is its ' + (keep === 3 ? "product" : "family") + '.</span>', 6000);
+            return;
+          }
+        }
         if (!catalogHasPath(p4)) { // renamed/removed since the link was shared
           view = "catalog"; sel = { prod: null, model: null }; clearSearch(); render(); resetScroll();
           syncHash(); // don't leave the dead deep link in the address bar to be copied or revisited
@@ -6598,11 +5997,11 @@
           return;
         }
         openTo(p4);                          // restore the family/product/model selection
-        if (movedTo) { syncHash(); showToast('<span>That model has moved — here it is in its new place.</span>', 6000); }
+        if (movedTo) { syncHash(); showToast('<span>That ' + (parts[3] ? "model" : "product") + ' has moved — here it is in its new place.</span>', 6000); }
         if (parts.length >= 5) {             // 5th segment = a resource → auto-open its preview
           var model = parts[3], rname = parts[4], arr = linksFor(model, rname);
           var known = RESOURCE_TYPES.some(function (r) { return r.name === rname; });
-          if (arr.length) openResource(arr, model + " · " + rname, model);
+          if (arr.length) { lbStartFile = parts[5] || null; openResource(arr, model + " · " + rname, model); } // a 6th segment names one file (F051)
           // An UNKNOWN 5th segment is a typo'd or outdated link, not an unlinked resource. Saying
           // "isn't linked yet" sent the reader hunting for a missing file instead of checking the URL.
           else if (!known) showToast('<span>That link names a file type the Hub doesn’t have (“' + escapeHtml(rname) + '”) — showing the model instead.</span>', 5000);
@@ -6638,7 +6037,7 @@
     _errSeen[k] = 1; _errSent++;
     window.PF_logEvent("client_error", k);
   }
-  function flushClientErrors() { _errLive = true; var held = _errHeld; _errHeld = []; held.forEach(reportClientError); }
+  function flushClientErrors() { _errLive = true; var held = _errHeld; _errHeld = []; window.__pfErrQ = null; held.forEach(reportClientError); }
   // A failure the app caught itself (startup, a tour step, a gallery) is still a failure worth hearing about (F096) —
   // unless it is SharePoint or the network answering (a 403, a 404, an offline blip): those are preview_fail's, not bugs.
   function reportCaught(where, e) {
@@ -6650,9 +6049,10 @@
   window.addEventListener("unhandledrejection", function (e) { var r = e && e.reason; if (!r || !r.stack || String(r.stack).indexOf(location.origin) === -1) return; reportClientError("unhandled: " + (r.message || String(r))); });
   document.addEventListener("securitypolicyviolation", function (e) { if (!e || /^(chrome|moz|safari)-extension:/.test(String(e.blockedURI || "")) || /^(chrome|moz|safari)-extension:/.test(String(e.sourceFile || ""))) return; reportClientError("CSP " + e.violatedDirective + " blocked " + String(e.blockedURI || "inline").split("?")[0]); });
   // pre-init.js caught whatever went wrong before these listeners existed (F029): its listeners stand down and its
-  // queue joins this one.
+  // queue joins this one. window.__pfErrQ then points at THIS held queue (F055): if a later top-level line throws,
+  // __startPF is never defined, and signin.js's flushBootErrors posts what is held here instead of finding nothing.
   if (window.__pfErrOff) window.__pfErrOff();
-  (window.__pfErrQ || []).forEach(reportClientError); window.__pfErrQ = null;
+  (window.__pfErrQ || []).forEach(reportClientError); window.__pfErrQ = _errHeld;
   // A send to a customer, or a send/download that did not go through: what and how many, never who.
   function logShare(ok, title, n, info) {
     if (!window.PF_logEvent) return;
@@ -6732,6 +6132,7 @@
     } else { clearTimeout(_missTimer); }
     var wrap = document.createElement("div"); wrap.className = "view";
     if (wasSearch) wrap.classList.add("no-anim");
+    var hitsAll = hits; hits = PF.collapseSharedHits(hits); // a facet keeps the models' own rows: the shared row has no code to filter on
     var srN = hits.length; // count announced to screen readers (post-filter when a facet is active)
     if (hits.length === 0) {
       wrap.innerHTML = '<h1 class="sr-head">No match for “' + escapeHtml(q) + '” yet. Try the product’s name or one word from it (e.g. “hoard”, “boulder”).</h1>' +
@@ -6741,7 +6142,7 @@
       // Filter/sort toolbar over the model-bearing rows (Model + Live). Family/Product rows are
       // navigational — a facet like "Work in progress" isn't meaningful for them — so when any filter is
       // active we narrow to model rows; with no filter we keep every row and only (optionally) sort.
-      var pool = hits.filter(function (n) { return n.lvl === "Model" || n.live; });
+      var pool = hitsAll.filter(function (n) { return !n.sharedRow && (n.lvl === "Model" || n.live); });
       var availCodes = PF.availableAttrs(pool, function (n) { return modelAttrs(n.model || n.name); }, MODEL_CODE_ORDER);
       searchFilter.attrs = searchFilter.attrs.filter(function (c) { return availCodes.indexOf(c) !== -1; }); // drop codes not in this result set
       var fActive = filterActive(searchFilter);
@@ -6785,7 +6186,12 @@
           b.addEventListener("click", function () {
             // A "Live" hit now opens the SAME in-app gallery/preview as the resource column
             // (was window.open on the raw SharePoint URL — and only the first file of a multi-file resource).
-            if (n.live && n.model) { openTo(n.path, true); openResource(linksFor(n.model, n.resource), n.model + " · " + n.resource, n.model); }
+            if (n.sharedRow) {
+              openTo(n.path, true);
+              var sarr = curSplit && curSplit.shared[n.resource];
+              if (Array.isArray(sarr) && sarr.length) openResource(sarr, n.path[2] + " · " + n.resource, firstHolder(prodByKey(sel.prod), n.resource, sarr[0]), { productPath: n.path });
+            }
+            else if (n.live && n.model) { openTo(n.path, true); openResource(linksFor(n.model, n.resource), n.model + " · " + n.resource, n.model); }
             else openTo(n.path, true);
           });
           list.appendChild(b);
@@ -6965,12 +6371,11 @@
   }
   // The one "it saved" toast: every catalog write lands in Smartsheet at once and reaches every other
   // browser on its next catalog refresh — hence the fixed tail.
-  function toastSaved(html, ms) { showToast(svg(ICONS.check) + '<span>' + html + ' Demo — resets when you reload.</span>', ms); }
+  function toastSaved(html, ms, action) { showToast(svg(ICONS.check) + '<span>' + html + ' Demo — resets when you reload.</span>', ms, action); }
 
   /* ============================================================
      PREVIEW LIGHTBOX & GALLERIES
      ============================================================ */
-  // ---- file preview (Microsoft Graph, as the signed-in user) ----
   // UTF-8 → base64url (Graph's documented sharing-URL encoding). Plain btoa() throws on any codepoint
   // > U+00FF, so a SharePoint URL with a non-ASCII path segment (or a stray smart-quote pasted into the
   // wire tool) would crash every preview/folder call; encodeURIComponent+unescape makes it byte-safe.
@@ -7127,13 +6532,15 @@
       addGuards(panel); // re-seat them each open: a resource switch rebuilds the panel's body
       if (!onKey) { onKey = trap; document.addEventListener("keydown", onKey, true); }
     }
-    function open(panel, initial) {
+    // fallback (optional): a function giving the element to return focus to when the opener was <body> (a shared link
+    // opened the dialog) or has since left the page — focus used to go nowhere on close (F069).
+    function open(panel, initial, fallback) {
       if (!panel) return;
       var root = modalRootOf(panel), i = indexOfRoot(root);
       if (i === -1) {
         // A new layer. Its own root may have been made inert by the layer beneath (the confirm is a cached
         // body child like any other) — lift that, and put it back when this layer closes.
-        var f = { root: root, panel: panel, prevFocus: document.activeElement, inerted: [], wasInert: root.hasAttribute("inert") };
+        var f = { root: root, panel: panel, prevFocus: document.activeElement, fallback: fallback, inerted: [], wasInert: root.hasAttribute("inert") };
         if (f.wasInert) root.removeAttribute("inert");
         setInert(f);
         frames.push(f);
@@ -7166,7 +6573,9 @@
       removeGuards();
       if (frames.length) seat(frames[frames.length - 1].panel);
       else { if (onKey) document.removeEventListener("keydown", onKey, true); onKey = null; active = null; }
-      if (f.prevFocus && f.prevFocus.focus) { try { f.prevFocus.focus(); } catch (x) {} }
+      var back = f.prevFocus;
+      if (!back || back === document.body || back.isConnected === false) back = typeof f.fallback === "function" ? f.fallback() : null;
+      if (back && back.focus) { try { back.focus(); } catch (x) {} }
     }
     return { open: open, close: close };
   })();
@@ -7232,7 +6641,7 @@
   // so a call site keeps ONE code path instead of branching around the dialog.
   function pfConfirmIf(cond, opts) { return cond ? pfConfirm(opts) : Promise.resolve(true); }
 
-  function closePreview() { if (lb) { lb.hidden = true; document.body.classList.remove("preview-open"); lbSel.stop(); lbAbortInflight(); setDlBusy(false); setShareBusy(false); /* a hung download/share must not leave its button disabled into the NEXT preview */ var b = lb.querySelector(".lb-body"); b.innerHTML = ""; b.classList.remove("doc"); lbClearBlob(); galNav = null; setDownloadAll(null); clearCopyHint(); lbMoreClose(false); lbShare = null; lbFile = null; /* the next preview must not inherit them (F059) */ a11yModal.close(lb.querySelector(".lb-panel")); } }
+  function closePreview() { if (lb) { _lbDocTitle = null; setDocTitle(); if (_pvHref && _pvBase && location.href === _pvHref && _pvBase !== _pvHref) { try { history.replaceState(history.state, "", _pvBase); } catch (e) {} } /* closed without Back: the address returns too (F085) */ lb.hidden = true; document.body.classList.remove("preview-open"); lbSel.stop(); lbAbortInflight(); setDlBusy(false); setShareBusy(false); /* a hung download/share must not leave its button disabled into the NEXT preview */ var b = lb.querySelector(".lb-body"); b.innerHTML = ""; b.classList.remove("doc"); lbClearBlob(); galNav = null; setDownloadAll(null); clearCopyHint(); lbMoreClose(false); lbShare = null; lbFile = null; /* the next preview must not inherit them (F059) */ a11yModal.close(lb.querySelector(".lb-panel")); } }
   // Turn a technical fetch error (e.g. "Graph 503", "preview 500") into plain language for the staff-facing
   // preview UI. The raw message still goes to console.error for debugging — staff never see a bare HTTP code.
   // PM-facing version of friendlyErr: a server-authored 4xx message is shown as-is (escaped); transport
@@ -7241,6 +6650,7 @@
   function pmErr(err) {
     var m = (err && err.message) ? String(err.message) : String(err || "");
     var status = err && err.status;
+    if (err && err.code === "session_expired") return "Your sign-in expired — sign in again first"; // F061
     var generic = /^(api|graph) \d{3}$/i.test(m.trim());
     if (status >= 400 && status < 500 && m && !generic && !/no token|sign in/i.test(m)) return escapeHtml(m);
     if (/no token|\b401\b|sign in/i.test(m)) return "Please sign in again";
@@ -7269,14 +6679,41 @@
   // Does this device have the Web Share sheet? External sends where it does and downloads where it doesn't;
   // every label and sentence about External asks here.
   function canWebShare() { return !!(navigator.canShare && navigator.share); }
-  // `retry` (optional): the opener to run again. The busy/timeout copy said "try again" with nothing to try
-  // again with (F086); a file that is gone or forbidden gets no button — retrying can't help.
+  // Can trying again help? Decided by the status code, never by the message wording (a copy edit to friendlyErr would
+  // bring the button back on dead files): a file that is gone, forbidden or needs a sign-in gets no Try again (F097).
+  function canRetryErr(err) {
+    var m = (err && err.message) ? String(err.message) : String(err || "");
+    var code = (m.match(/\b(\d{3})\b/) || [])[1];
+    return !(code === "401" || code === "403" || code === "404" || /sign in/i.test(m));
+  }
+  // THE preview error box, for the single preview and each gallery file alike (F097). `retry` (optional): what to run
+  // again — the busy/timeout copy said "try again" with nothing to try again with (F086/F060). Pressing it moves focus to
+  // the dialog's Close button first, since the box (and the button) is about to be replaced. `_say` is its announcement.
+  function errorNode(url, msg, retry) {
+    var d = document.createElement("div"); d.className = "lb-err";
+    var canRetry = typeof retry === "function";
+    // A file that is gone: "Open in SharePoint" is the same dead link, so the way forward is to say so (F047).
+    if (FILE_GONE_RE.test(msg)) {
+      d.innerHTML = '<p>' + escapeHtml(msg) + '</p><button class="wire-btn lb-report" type="button">Report this file</button>';
+      d.querySelector(".lb-report").addEventListener("click", function () { flagPreview("File not found."); });
+      d._say = msg + " Report this file button available.";
+      return d;
+    }
+    d.innerHTML = '<p>' + escapeHtml(msg) + '</p>' + (canRetry ? '<button class="wire-btn lb-retry" type="button">Try again</button> ' : '') + '<a class="lb-openbtn" href="' + escapeAttr(url) + '" target="_blank" rel="noopener">Open in SharePoint →</a>';
+    var rb = d.querySelector(".lb-retry");
+    if (rb) rb.addEventListener("click", function () { var c = lb && lb.querySelector(".lb-close"); if (c && d.contains(document.activeElement)) c.focus(); retry(); });
+    d._say = msg + (canRetry ? " Try again button and" : "") + " Open in SharePoint link available.";
+    return d;
+  }
+  var FILE_GONE_RE = /couldn’t be found/;
   function lbError(url, msg, retry) {
     if (!lb) return;
-    var canRetry = typeof retry === "function" && !/couldn’t be found|permission/.test(msg);
-    lb.querySelector(".lb-body").innerHTML = '<div class="lb-err"><p>' + escapeHtml(msg) + '</p>' + (canRetry ? '<button class="wire-btn lb-retry" type="button">Try again</button> ' : '') + '<a class="lb-openbtn" href="' + escapeAttr(url) + '" target="_blank" rel="noopener">Open in SharePoint →</a></div>';
-    var rb = lb.querySelector(".lb-body .lb-retry"); if (rb) rb.addEventListener("click", function () { retry(); });
-    if (srAnnounce) srAnnounce.textContent = msg + (canRetry ? " Try again button and" : "") + " Open in SharePoint link available."; // focus stays on Close; a screen reader otherwise heard nothing (F116)
+    var body = lb.querySelector(".lb-body"), node = errorNode(url, msg, retry);
+    body.innerHTML = ""; body.appendChild(node);
+    // Nothing to download or send: both would fail and point at the same dead link. A Hub link to a missing file helps nobody either (F047).
+    var gone = FILE_GONE_RE.test(msg);
+    if (gone || /may not have permission/.test(msg)) { setDlReady(false); if (lbShareExtBtn) lbShareExtBtn.disabled = true; if (gone && lbCopyBtn) lbCopyBtn.disabled = true; }
+    if (srAnnounce) srAnnounce.textContent = node._say; // focus stays on Close; a screen reader otherwise heard nothing (F116)
   }
   // A per-user 403/404 opening a WIRED file is invisible to the daily link-health cron (which checks
   // app-only): the file exists and the cron can read it, but THIS user can't (no SharePoint access) or it
@@ -7311,7 +6748,21 @@
   function lbWatchdog(_seq, url) {
     setTimeout(function () { if (lb._seq === _seq && !lb.hidden && lb.querySelector(".lb-body .lb-loading-init")) lbError(url, "This is taking a while to load. Try opening it in SharePoint."); }, 15000);
   }
+  // Where focus goes when a preview closes and nothing opened it (a shared Hub link): the row of the file that was
+  // showing, on the model card first, else the page content (F069).
+  function lbReturnTarget() {
+    var r = lbShare && lbShare.resource, q = r ? '.res[data-res="' + String(r).replace(/["\\]/g, "\\$&") + '"]' : "";
+    return (q && (document.querySelector(".col-model " + q) || document.querySelector(q))) || document.getElementById("content");
+  }
+  // The address of what the preview shows; the current one when it is not a catalog resource (a PM panel's file).
+  var _pvHref = null, _pvBase = null;
+  function previewHref(title) {
+    if (!lbShare || !lbShare.resource || String(title || "").indexOf(lbShare.resource) === -1) return location.href;
+    if (lbShare.productPath) return productResourceShareUrl(lbShare.productPath, lbShare.resource);
+    return (lbShare.model && findModelPath(lbShare.model)) ? resourceShareUrl(lbShare.model, lbShare.resource) : location.href;
+  }
   function lbBegin(title, fallbackTitle, openHref, loadingHtml) {
+    if (lbShareExtBtn) lbShareExtBtn.disabled = false; if (lbCopyBtn) lbCopyBtn.disabled = false; // lbError may have turned them off for the last file (F047)
     lbSel.stop(); lbSelCapNoted = false; lbGalKeys = null; lbGalEntries = null; // no picks carry into the next preview
     lbAbortInflight(); lbClearBlob(); // cancel a prior view's in-flight Office→PDF conversion + revoke its blob
     lb.querySelector(".lb-title").textContent = title || fallbackTitle; setLbUpdated(title);
@@ -7319,13 +6770,20 @@
     var body = lb.querySelector(".lb-body"); body.classList.remove("doc"); body.innerHTML = loadingHtml;
     var first = body.firstElementChild; if (first && first.classList.contains("lb-loading")) first.classList.add("lb-loading-init");
     lbFile = null; setDlReady(false); // until this open resolves a file, Download must not grab the previous one (F059) — and stays disabled
-    lb.hidden = false; a11yModal.open(lb.querySelector(".lb-panel"), lb.querySelector(".lb-close"));
+    lb.hidden = false; a11yModal.open(lb.querySelector(".lb-panel"), lb.querySelector(".lb-close"), lbReturnTarget);
     if (srAnnounce) srAnnounce.textContent = "Loading preview"; // the result (a view, or an error) announces itself when it lands
     document.body.classList.add("preview-open"); // phones: the page behind must not scroll (F157). State-named: "lb-open" was also the Open-in-SharePoint button's class and its rule restyled <body> (audit 2026-10-17 F004/F009)
     // One history entry for the open preview, so Back closes it instead of popping a catalog level or
     // leaving the installed app (F126). Keyed on the live history state, not a flag: a preview reopened by
     // Manage Document (same entry) must not push a second one.
-    try { if (!(history.state && history.state.pfPreview)) history.pushState({ pfPreview: 1 }, "", location.href); } catch (e) {}
+    // That entry names the file (F085), so the address bar can be copied or bookmarked and the tab says what it shows.
+    var pvHref = previewHref(title);
+    try {
+      if (history.state && history.state.pfPreview) { if (!_pvBase) _pvBase = location.href; history.replaceState(history.state, "", pvHref); }
+      else { _pvBase = location.href; history.pushState({ pfPreview: 1 }, "", pvHref); }
+      _pvHref = location.href;
+    } catch (e) {}
+    _lbDocTitle = title || fallbackTitle; setDocTitle();
     lb._seq = (lb._seq || 0) + 1; return lb._seq;
   }
   // lbBegin said "Loading preview"; a single file that lands must say so too, or that is the last thing a
@@ -7420,7 +6878,7 @@
       if (lb.hidden || lb._seq !== _seq) return; // superseded/closed — don't paint a stale error over the current preview
       console.error("preview error", err);
       logPreviewFail(err); reportCaught("preview", err);
-      lbError(url, friendlyErr(err), function () { openPreview(url, title); });
+      lbError(url, friendlyErr(err), canRetryErr(err) && function () { openPreview(url, title); });
     });
   }
   function galResolve(url, bearer) {
@@ -7441,9 +6899,10 @@
   // A gallery file that failed to resolve keeps its error (shown as its own reason) and a type guessed from its name,
   // so a failed PDF is not drawn as a broken image (F041).
   function galFailed(it, e) { return { full: null, thumb: null, name: it.label, isImage: isImageFile(it.url || it.label || "", ""), err: e }; }
-  function openGallery(items, title) {
+  // rname (optional): the resource type, so a multi-file preview of flyers or spec sheets doesn't say "renders" (F082).
+  function openGallery(items, title, rname) {
     if (!lb) { window.open(items[0].url, "_blank", "noopener"); return; }
-    var _seq = lbBegin(title, "Renders", folderUrlOf(items[0].url), '<div class="lb-loading">Loading renders…</div>'); // Open → the folder that holds the views
+    var _seq = lbBegin(title, rname || "Files", folderUrlOf(items[0].url), '<div class="lb-loading">Loading files…</div>'); // Open → the folder that holds the views
     // Loading watchdog (mirrors openPreview): if it's still spinning after 15s, surface a recovery path
     // rather than an eternal "Loading renders…" — field sales hit exactly the flaky networks this guards.
     lbWatchdog(_seq, items[0].url);
@@ -7462,8 +6921,8 @@
       }, 6);
     }).catch(function (err) {
       if (lb.hidden || lb._seq !== _seq) return;
-      console.error("gallery error", err);
-      lbError(items[0].url, friendlyErr(err), function () { openGallery(items, title); });
+      console.error("gallery error", err); logPreviewFail(err); reportCaught("gallery", err); // as its renders and mixed siblings (F119)
+      lbError(items[0].url, friendlyErr(err), canRetryErr(err) && function () { openGallery(items, title, rname); });
     });
   }
   function buildGallery(items, resolved) {
@@ -7473,8 +6932,8 @@
       '<div class="gal">' +
         '<div class="gal-strip"></div>' + // list of documents on the LEFT (named), the viewer to its right
         '<div class="gal-main">' +
-          '<button class="gal-nav gal-prev" type="button" aria-label="Previous view">' + LCHEV + '</button>' +
-          '<button class="gal-nav gal-next" type="button" aria-label="Next view">' + RCHEV + '</button>' +
+          '<button class="gal-nav gal-prev" type="button" aria-label="Previous file">' + LCHEV + '</button>' +
+          '<button class="gal-nav gal-next" type="button" aria-label="Next file">' + RCHEV + '</button>' +
         '</div>' +
       '</div>';
     var main = body.querySelector(".gal-main");
@@ -7507,14 +6966,22 @@
     }
     bar.querySelector(".gal-sel-toggle").addEventListener("click", function () { if (lbSel.isOn()) lbSel.stop(); else lbSel.start(); paintSel(); });
     bar.querySelector(".gal-sel-all").addEventListener("click", function () { lbSel.all(lbGalKeys); paintSel(); });
-    bar.querySelector(".gal-sel-clear").addEventListener("click", function () { lbSel.clear(); paintSel(); });
+    bar.querySelector(".gal-sel-clear").addEventListener("click", function () { lbSel.clear(); paintSel(); bar.querySelector(".gal-sel-all").focus(); }); // as the model card's Clear (F052)
     // Swap only the image/error node, leaving the (absolute) arrows in place.
     function setStage(node) { var old = main.querySelector("img, .lb-err, .gal-doc, .lb-loading"); if (old) old.remove(); main.appendChild(node); }
-    function errNode(url, msg) {
-      var d = document.createElement("div"); d.className = "lb-err";
-      d.innerHTML = '<p>' + escapeHtml(msg) + '</p><a class="lb-openbtn" href="' + escapeAttr(url) + '" target="_blank" rel="noopener">Open in SharePoint →</a>';
-      if (srAnnounce) srAnnounce.textContent = msg + " Open in SharePoint link available.";
-      return d;
+    // A file's error box (the preview's own errorNode, with Try again where retrying can help — F060/F097). Painted
+    // inside show(), it is announced by show()'s one announcement at the end, with the view position (F010); painted
+    // later (an image or document that fails after show() returned), stageErr announces it itself.
+    function errNode(url, msg, retry) { return errorNode(url, msg, retry); }
+    function stageErr(node) { setStage(node); if (srAnnounce) srAnnounce.textContent = node._say; }
+    // Try again for a file whose lookup failed: look it up afresh and repaint its tile and the stage.
+    var gseq = lb._seq;
+    function reResolve(i) {
+      if (!window.PF_getToken) return;
+      resolved[i] = undefined; update(i); // a pending tile and stage while it loads
+      window.PF_getToken().then(function (t) { return galResolve(items[i].url, "Bearer " + t); })
+        .then(function (r) { resolved[i] = r; }, function (e) { logPreviewFail(e); resolved[i] = galFailed(items[i], e); })
+        .then(function () { if (lb.hidden || lb._seq !== gseq) return; update(i); });
     }
     function pendingNode() { var d = document.createElement("div"); d.className = "lb-loading"; d.innerHTML = '<span class="lb-skel" aria-hidden="true"></span><span>Loading…</span>'; return d; }
     var prevBtn = body.querySelector(".gal-prev");
@@ -7526,7 +6993,7 @@
     // Extension-stripped display name so each item reads as "what it actually is" (not "….pdf").
     // Strip a real file extension only. /\.[a-z0-9]{1,6}$/ also ate a version tail, so "Shelf v1.2"
     // displayed as "Shelf v1" — an extension has at least one letter, a version segment is all digits.
-    function galName(i) { var rr = resolved[i], nm = (rr && rr.name) || items[i].label || ("View " + (i + 1)); return String(nm).replace(/\.(?=[a-z0-9]{1,6}$)(?=[a-z0-9]*[a-z])[a-z0-9]+$/i, "") || nm; }
+    function galName(i) { var rr = resolved[i], nm = (rr && rr.name) || items[i].label || ("File " + (i + 1)); return String(nm).replace(/\.(?=[a-z0-9]{1,6}$)(?=[a-z0-9]*[a-z])[a-z0-9]+$/i, "") || nm; }
     // A tile's picture: the thumbnail, a type icon, or — still resolving (F111) — a placeholder.
     function tileHtml(i) {
       var it = items[i], r = resolved[i], nm = galName(i);
@@ -7551,9 +7018,10 @@
         var ifr = wrap.querySelector("iframe"), drop = function () { var l = wrap.querySelector(".lb-frameload"); if (l) l.remove(); };
         ifr.addEventListener("load", drop); setTimeout(drop, 20000);
         setStage(wrap);
-      }).catch(function () { if (idx === want && !lb.hidden) setStage(errNode(it.url, "Preview isn’t available here.")); });
+      }).catch(function () { if (idx === want && !lb.hidden) stageErr(errNode(it.url, "Preview isn’t available here.")); });
     }
     function show(i) {
+      if (i !== idx && lbShareBusy && !lbSel.isOn()) setShareBusy(false); // a share prepared for the previous file is not this one's (F001)
       idx = i; lbClearBlob();
       var sig = lbFreshSignal(); // paging away cancels the previous view's in-flight conversion
       // NOTE: "Open in SharePoint" stays pointed at the containing FOLDER (set by the caller),
@@ -7563,13 +7031,13 @@
       lbFile = { name: (r && r.name) || it.label || null, downloadUrl: (r && r.full) || null, fileUrl: it.url }; setDlReady(true);
       var isImg = (r && typeof r.isImage === "boolean") ? r.isImage : (it.isImage !== false);
       if (!r) { setStage(pendingNode()); } // still resolving: update(i) re-shows it the moment it lands (F111)
-      else if (r && r.err) setStage(errNode(it.url, friendlyErr(r.err)));
+      else if (r && r.err) setStage(errNode(it.url, friendlyErr(r.err), canRetryErr(r.err) && function () { reResolve(i); }));
       else if (isImg) { // image
         if (r && (r.stage || r.full)) {
           var img = document.createElement("img"); img.alt = it.label || (r && r.name) || "Product view"; // main content image — never leave alt empty
           // Guard like the doc branch: a late error from a PREVIOUS view's image must not paint over the view
           // the user has since paged to.
-          img.onerror = function () { if (idx !== i || lb.hidden) return; setStage(errNode(it.url, "This view couldn’t be displayed.")); };
+          img.onerror = function () { if (idx !== i || lb.hidden) return; stageErr(errNode(it.url, "This view couldn’t be displayed.", function () { show(i); })); };
           // Paint the strip's thumbnail at once (already cached), then swap in the screen-sized rendition when
           // it lands — the stage used to sit blank while a multi-MB original downloaded (F123/F210). If the
           // rendition fails, the original is the fallback.
@@ -7582,7 +7050,7 @@
             big.src = hi;
           } else { img.src = hi; }
           setStage(img);
-        } else { setStage(errNode(it.url, "This view couldn’t be loaded.")); }
+        } else { setStage(errNode(it.url, "This view couldn’t be loaded.", function () { reResolve(i); })); }
       } else { // document
         var load = document.createElement("div"); load.className = "lb-loading";
         load.innerHTML = '<span class="lb-skel" aria-hidden="true"></span><span>Loading preview…</span>';
@@ -7590,7 +7058,7 @@
         var want = i;
         // Watchdog: a document whose fetch or conversion never settles left "Loading preview…" up forever
         // (F331). Keyed on the loading element still being in the DOM — any successful paint removes it.
-        setTimeout(function () { if (idx !== want || lb.hidden || !load.isConnected) return; setStage(errNode(it.url, "This preview is taking too long to load.")); }, 30000);
+        setTimeout(function () { if (idx !== want || lb.hidden || !load.isConnected) return; stageErr(errNode(it.url, "This preview is taking too long to load.", function () { show(want); })); }, 30000);
         // On a PHONE, iOS's native PDF-in-iframe ignores fit-to-width so gallery docs get cut off on the
         // right — route them through the responsive MS viewer too (same as the single-doc preview). Desktop
         // keeps the fast native PDF viewer (no OneDrive chrome, full-size), falling back to MS embed on error.
@@ -7606,9 +7074,13 @@
       // Walk the TILES, not the strip's child nodes: the Select bar is the strip's first child, and counting it put
       // the highlight one tile behind the file on stage (hands-on L2).
       tiles.forEach(function (tile, t) { var onT = t === idx; tile.classList.toggle("on", onT); if (onT) tile.setAttribute("aria-current", "true"); else tile.removeAttribute("aria-current"); });
-      // Announce the new view for screen readers (the stage swap is otherwise silent).
-      if (srAnnounce) srAnnounce.textContent = items.length > 1 ? (it.label || ("View " + (i + 1))) + " — view " + (i + 1) + " of " + items.length
-        : (it.label || "Preview") + " — preview open"; // a one-item gallery said nothing at all (F030); it is announced as it is shown, like the views above
+      // Announce the new view for screen readers (the stage swap is otherwise silent). ONE announcement, built here:
+      // the view line, then the error on stage if this view failed — painting the error used to announce it and this
+      // line then overwrote it in the same tick, so a failure was never heard (F010).
+      var say = items.length > 1 ? (it.label || ("File " + (i + 1))) + " — file " + (i + 1) + " of " + items.length + "."
+        : (it.label || "Preview") + " — preview open."; // a one-item gallery said nothing at all (F030); it is announced as it is shown, like the views above
+      var errOn = main.querySelector(".lb-err");
+      if (srAnnounce) srAnnounce.textContent = say + (errOn && errOn._say ? " " + errOn._say : "");
       // Don't leave focus on a button we're about to disable — the browser drops it to <body>, escaping
       // the modal's focus context. Move focus to the other arrow first, so paging to a boundary keeps
       // the user inside the dialog.
@@ -7624,7 +7096,10 @@
     function refreshDownloadAll() { setDownloadAll(items.length >= 2 ? items.map(function (it, i) { return { fileUrl: it.url, downloadUrl: (resolved[i] && resolved[i].full) || null, name: (resolved[i] && resolved[i].name) || it.label || null }; }) : null); }
     refreshDownloadAll();
     paintSel();
-    show(0);
+    // A Hub link that names one file opens on it (F051); otherwise the first.
+    var start = 0;
+    if (lbStartFile) { for (var si = 0; si < items.length; si++) if (galFileKey(items[si].url, si) === lbStartFile) { start = si; break; } lbStartFile = null; }
+    show(start);
     // A file resolved after the gallery painted (F111): its tile, its name in the pick list, the download list, and the
     // stage if it is the one on show. Select-mode state lives on the tile classes, so repaint it too.
     function update(i) {
@@ -7646,10 +7121,9 @@
   function oldSiteMsg(url) {
     if (!window.PF.isLegacyUrl(url)) return "";
     var mkt = String(url).toLowerCase().indexOf("/" + window.PF.LEGACY_SITES[0].toLowerCase() + "/") !== -1; // [0] is the Marketing site
-    return "That link is on the " + (mkt ? "old Marketing site" : "old site") + ", which is being emptied. Link the copy on the Product Management site instead.";
+    return "That link is on the " + (mkt ? "old Marketing site" : "old site") + ", which is no longer used. Link the copy on the Product Management site instead.";
   }
   function modelRe(model) { return window.PF.modelRe(model); }
-  function normModel(s) { return window.PF.normModel(s); }
   function matchesModel(name, model) { return window.PF.matchesModel(name, model); }
   // Turn a filename into a short view label (drop model code, date stamp, extension).
   function viewLabel(name, model) {
@@ -7719,7 +7193,7 @@
   // How many catalog resources point at this exact folder URL — >1 means it's a SHARED folder
   // (filter files by model name); ==1 means a DEDICATED folder (show every file, no naming rules).
   // How many MODELS reference this folder, through any resource and in any cell shape — a folder-only cell
-  // or a mixed folder + pinned-file cell (the wire tool makes those). Counting only single-link cells read
+  // or a mixed folder + pinned-file cell (older saves made those). Counting only single-link cells read
   // a shared render folder as DEDICATED and showed every model's files under each (F061). Distinct models,
   // so one model wiring the folder to two resource types does not flip it to "shared". lib/linkcheck.js
   // buildRefCount mirrors this for the cron.
@@ -7741,9 +7215,9 @@
       });
     });
   }
-  function openRenders(folderUrl, model, title) {
+  function openRenders(folderUrl, model, title, rname) {
     if (!lb) { window.open(folderUrl, "_blank", "noopener"); return; }
-    var _seq = lbBegin(title, "Renders", folderUrl, '<div class="lb-loading">Loading renders…</div>');
+    var _seq = lbBegin(title, rname || "Files", folderUrl, '<div class="lb-loading">Loading files…</div>');
     if (!window.PF_getToken) { lbError(folderUrl, "Please sign in again to preview files."); return; }
     // The same 15s watchdog every other opener has. Without it a stalled token or Graph call left
     // "Loading renders…" on screen indefinitely, with no way out but closing the modal.
@@ -7752,24 +7226,24 @@
       return listFolderRenders(folderUrl, model, "Bearer " + token);
     }).then(function (items) {
       if (lb.hidden || lb._seq !== _seq) return;
-      if (!items.length) { lbError(folderUrl, "No renders for " + model + " in this folder yet."); return; }
+      if (!items.length) { lbError(folderUrl, "No " + (rname || "files") + " for " + model + " in this folder yet."); return; }
       var resolved = items.map(function (it) { return { full: it.full, thumb: it.thumb, name: it.name || it.label, isImage: it.isImage }; });
       buildGallery(items, resolved);
     }).catch(function (err) {
       if (lb.hidden || lb._seq !== _seq) return;
       console.error("renders error", err);
       logPreviewFail(err); reportCaught("renders", err);
-      lbError(folderUrl, friendlyErr(err), function () { openRenders(folderUrl, model, title); });
+      lbError(folderUrl, friendlyErr(err), canRetryErr(err) && function () { openRenders(folderUrl, model, title, rname); });
     });
   }
   // Mixed resource: a cell holding BOTH a folder url AND one or more file urls (e.g. a folder-wired model
   // that later had a single file pinned — Tier-1 fix #2 can create these). Expand every folder to its files
   // and flatten all of it into ONE gallery, so a folder url no longer lands as a broken "file" tile.
   // Folder listings already carry the resolved fields; direct files are resolved via galResolve.
-  function openMixedGallery(arr, title, model) {
+  function openMixedGallery(arr, title, model, rname) {
     if (!lb) { window.open(arr[0].url, "_blank", "noopener"); return; }
     var folderHref = (arr.filter(function (a) { return looksLikeFolder(a.url); })[0] || {}).url || folderUrlOf(arr[0].url);
-    var _seq = lbBegin(title, "Renders", folderHref, '<div class="lb-loading">Loading renders…</div>');
+    var _seq = lbBegin(title, rname || "Files", folderHref, '<div class="lb-loading">Loading files…</div>');
     // Loading watchdog (mirrors openPreview/openGallery): recover from a hung resolve instead of spinning forever.
     lbWatchdog(_seq, arr[0].url);
     if (!window.PF_getToken) { lbError(arr[0].url, "Please sign in again to preview files."); return; }
@@ -7794,12 +7268,12 @@
         if (seen[key]) return; seen[key] = 1; // a pinned file that also lives in the folder shows once, not twice
         items.push(x.item); resolved.push(x.resolved);
       }); });
-      if (!items.length) { lbError(folderHref, failures.length ? friendlyErr(failures[0]) : "No files to preview here yet."); return; }
+      if (!items.length) { if (failures.length) lbError(folderHref, friendlyErr(failures[0]), canRetryErr(failures[0]) && function () { openMixedGallery(arr, title, model, rname); }); else lbError(folderHref, "No files to preview here yet."); return; } // every folder failed: Try again (F060)
       buildGallery(items, resolved);
       if (failures.length) showToast('<span>' + failures.length + ' folder' + (failures.length === 1 ? '' : 's') + ' couldn’t be opened — showing the rest.</span>', 7000);
     }).catch(function (err) {
       if (lb.hidden || lb._seq !== _seq) return;
-      console.error("mixed gallery error", err); logPreviewFail(err); reportCaught("gallery", err); lbError(arr[0].url, friendlyErr(err), function () { openMixedGallery(arr, title, model); });
+      console.error("mixed gallery error", err); logPreviewFail(err); reportCaught("gallery", err); lbError(arr[0].url, friendlyErr(err), canRetryErr(err) && function () { openMixedGallery(arr, title, model, rname); });
     });
   }
   // One entry point for opening a resource: folder → live render gallery, many files → gallery, one file → preview.
@@ -7810,8 +7284,8 @@
     var rname = (title && title.indexOf("·") !== -1) ? title.split("·").pop().trim() : null;
     lbShare = { model: model, resource: rname, productPath: (opts && opts.productPath) || null };
     window.PF_logEvent && window.PF_logEvent("resource_open", model ? (model + (rname ? " · " + rname : "")) : (title || ""));
-    if (arr.length === 1 && looksLikeFolder(arr[0].url)) openRenders(arr[0].url, model, title);
-    else if (arr.length > 1) { if (arr.some(function (a) { return looksLikeFolder(a.url); })) openMixedGallery(arr, title, model); else openGallery(arr, title); }
+    if (arr.length === 1 && looksLikeFolder(arr[0].url)) openRenders(arr[0].url, model, title, rname);
+    else if (arr.length > 1) { if (arr.some(function (a) { return looksLikeFolder(a.url); })) openMixedGallery(arr, title, model, rname); else openGallery(arr, title, rname); }
     else openPreview(arr[0].url, title);
   }
   function resourceClick(e, arr, title, model, opts) {
@@ -7871,12 +7345,13 @@
     function update() {
       ticking = false;
       var y = window.scrollY || document.documentElement.scrollTop || 0;
-      var mobile = !window.matchMedia || window.matchMedia("(max-width: 620px)").matches;
+      // Phones, and short screens such as a phone on its side (F066, owner's pick 4a) — the same query as the CSS.
+      var mobile = !window.matchMedia || window.matchMedia("(max-width: 620px), (max-height: 500px)").matches;
       var focusInHeader = topbar && topbar.contains(document.activeElement);
       // The tour keeps the header shown: two of its steps point INTO the header, and a header collapsing under a
       // spotlight moves everything it lit (F008/F006, audit 2026-10-26).
       if (!mobile || y < 80 || focusInHeader || tourState) { show(); lastY = y; return; }
-      if (y > lastY + 4) document.body.classList.add("nav-hidden");         // scrolling down → hide
+      if (y > lastY + 4) { if (!document.body.classList.contains("nav-hidden")) syncTopbarHeight(); document.body.classList.add("nav-hidden"); } // scrolling down → hide
       else if (y < lastY - 4) show();                                       // scrolling up → show
       lastY = y;
     }
@@ -8036,10 +7511,13 @@
   var COPY_HINT_MSG = INFOICON + '<span><b>Internal link</b> — opens only for Grumbleton sign-ins. To share with a customer, use <b>Share › External</b> and send them the file.</span>';
   var lbCopyHint = null, copyHintPinned = false, copyHintTimer;
   function copyHintEl() {
-    if (!lbCopyHint && toastTopWrap) {
+    var host = toastStatus || toastTopWrap;
+    if (!lbCopyHint && host) {
       lbCopyHint = document.createElement("div"); lbCopyHint.className = "copy-hint"; lbCopyHint.id = "lbCopyHint";
       lbCopyHint.innerHTML = COPY_HINT_MSG; // present from the start so aria-describedby resolves
-      toastTopWrap.appendChild(lbCopyHint);
+      // ONE stack with the toasts, the hint on top: in its own wrapper it sat on exactly the toasts' spot and hid
+      // whichever toast was showing (F016, owner's pick 1a). Still a polite live region, as before.
+      host.insertBefore(lbCopyHint, host.firstChild);
       if (lbCopyBtn) lbCopyBtn.setAttribute("aria-describedby", "lbCopyHint");
     }
     return lbCopyHint;
@@ -8064,7 +7542,7 @@
     if (lbCopyBtn) { lbCopyBtn.classList.add("copied"); setTimeout(function () { lbCopyBtn.classList.remove("copied"); }, 1400); }
   }
   function lbCopyLabel() {
-    if (lbCopyBtn) lbCopyBtn.innerHTML = LINKICON + '<span>' + window.PF.selectionLabel("Internal — copy Hub link", "Copy selected links", lbSel) + '</span>';
+    if (lbCopyBtn) lbCopyBtn.innerHTML = LINKICON + '<span>' + window.PF.selectionLabel("Internal — copy Hub link", "Internal — copy selected links", lbSel) + '</span>';
   }
   if (lbCopyBtn) {
     lbCopyLabel();
@@ -8076,15 +7554,22 @@
     // WCAG 1.4.13: hover/focus content must be dismissible without moving the pointer or focus.
     lbCopyBtn.addEventListener("keydown", function (e) { if (e.key === "Escape" && lbCopyHint && lbCopyHint.classList.contains("show")) { e.stopPropagation(); clearCopyHint(); } });
     lbCopyBtn.addEventListener("click", function () {
-      if (lbSel.isOn()) { // Copy selected links: the picked files' SharePoint links as one rich pack
-        var picks = lbSel.pick(lbGalKeys || []).map(function (i) { return lbGalEntries[i]; }).filter(function (e) { return e && e.url; });
-        if (!picks.length) return;
-        var out = sharePackContent({ kind: "model", title: lb.querySelector(".lb-title").textContent, resources: picks.map(function (e) { return { name: e.name || "file", url: e.url }; }) });
+      if (lbSel.isOn()) { // Copy selected links: one Hub link per picked file, as one rich pack
+        var idxs = lbSel.pick(lbGalKeys || []).filter(function (i) { return lbGalEntries[i] && lbGalEntries[i].url; });
+        if (!idxs.length) return;
+        // Hub links, like the model card's Copy selected links, so "Internal" means one thing everywhere (F051, owner's
+        // pick 1a): each opens this preview on that file. A preview with no catalog place (no model, no product) has no
+        // Hub link to give, so its picks stay SharePoint links, said so.
+        var base = lbShare && lbShare.productPath ? productResourceShareUrl(lbShare.productPath, lbShare.resource)
+          : (lbShare && lbShare.model && findModelPath(lbShare.model)) ? resourceShareUrl(lbShare.model, lbShare.resource) : null;
+        var out = sharePackContent({ kind: "model", title: lb.querySelector(".lb-title").textContent, resources: idxs.map(function (i) {
+          var e = lbGalEntries[i]; return { name: e.name || "file", url: base ? base + "/" + encodeURIComponent(galFileKey(e.url, i)) : e.url };
+        }) });
         copyRichText(out.html, out.text).then(function () {
-          // One message, about the links actually copied: SharePoint file links, not the Hub link the pinned hint
-          // describes — the two used to fire together and contradict each other (F078).
           if (lbCopyBtn) { lbCopyBtn.classList.add("copied"); setTimeout(function () { lbCopyBtn.classList.remove("copied"); }, 1400); }
-          showToast(PACKICON + '<span><b>' + picks.length + ' SharePoint link' + (picks.length === 1 ? '' : 's') + ' copied</b> — ' + (picks.length === 1 ? 'it opens' : 'they open') + ' only for people with access to that folder.</span>', 6000);
+          var n = idxs.length, s = n === 1 ? '' : 's';
+          showToast(PACKICON + '<span><b>' + n + (base ? ' Hub link' + s + ' copied</b> — ' + (n === 1 ? 'it opens' : 'they open') + ' only for Grumbleton sign-ins.'
+            : ' SharePoint link' + s + ' copied</b> — ' + (n === 1 ? 'it opens' : 'they open') + ' only for people with access to that folder.') + '</span>', 6000);
         }, function () { showError('<span>Couldn’t copy — try again.</span>'); });
         return;
       }
@@ -8194,7 +7679,7 @@
   function lbDownloadLabel(busy) {
     if (!lbDownloadBtn) return;
     var multi = !!lbAllFiles && !lbSel.isOn();
-    var txt = busy ? "Saving…" : multi ? "Download (" + lbAllFiles.length + ")" : window.PF.selectionLabel("Download", "Download selected", lbSel);
+    var txt = busy ? "Downloading…" : multi ? "Download (" + lbAllFiles.length + ")" : window.PF.selectionLabel("Download", "Download selected", lbSel);
     lbDownloadBtn.innerHTML = DLICON + '<span>' + txt + '</span>' + (multi ? LB_CARET : "");
   }
   // "Choose files…": press the gallery's own Select toggle (built per gallery, in the strip); the visible button
@@ -8239,7 +7724,7 @@
     var links = [];
     if (freshUrl) links.push('<a href="' + escapeAttr(safeUrl(freshUrl) || "#") + '" download="' + escapeAttr(name || "") + '" target="_blank" rel="noopener">download it</a>');
     if (fileUrl) links.push('<a href="' + escapeAttr(safeUrl(fileUrl) || "#") + '" target="_blank" rel="noopener">open it in SharePoint</a>');
-    showError(DLICON + '<span>Couldn’t save <span class="tmono">' + escapeHtml(name || "the file") + '</span> here' + (links.length ? ' — ' + links.join(' or ') : '') + '.</span>', 15000);
+    showError(DLICON + '<span>Couldn’t download <span class="tmono">' + escapeHtml(name || "the file") + '</span> here' + (links.length ? ' — ' + links.join(' or ') : '') + '.</span>', 15000);
   }
   // Select mode: the visible Download takes the picks (it used to save only the file on stage — F138). A multi-file
   // preview outside Select mode opens the menu; a single file downloads at once.
@@ -8254,6 +7739,7 @@
     setDlBusy(true);
     function saveOk(b, name) {
       saveBlob(b, name || f.name);
+      logShare(true, name || f.name || "", 1, "download"); // decision 6a, F057: a preview download is a send; its failures were already counted
       showToast(DLICON + '<span>Downloading <span class="tmono">' + escapeHtml(name || f.name || "file") + '</span>…</span>');
       setDlBusy(false);
     }
@@ -8293,8 +7779,9 @@
   var lbShareBtn = document.getElementById("lbShareBtn"), lbShareMenu = document.getElementById("lbShareMenu"), lbShareExtBtn = document.getElementById("lbShareExtBtn");
   var lbShareBusy = false, lbShareReady = false;
   // Share ▾ (2026-10-19): Internal = the Copy-link button (a Hub deep link, Grumbleton sign-ins only); External =
-  // the file itself through the share sheet — pre-fetched on every device that can share, so the first click
-  // opens the sheet inside its own activation — or, where nothing can share, a download. Shown on every device.
+  // the file itself through the share sheet — pre-fetched on touch devices, so the first tap opens the sheet inside
+  // its own activation (a slow desktop click may need a second one: decision 7a) — or, where nothing can share, a
+  // download. Shown on every device.
   var lbShareDisc = lbDisclosure(lbShareBtn, lbShareMenu);
   function lbShareLabel() {
     if (!lbShareBtn) return;
@@ -8303,8 +7790,9 @@
   }
   function lbShareExtLabel(on) {
     if (!lbShareExtBtn) return;
-    var base = canWebShare() ? "External — send the file" : "External — download the file";
-    lbShareExtBtn.title = canWebShare() ? "Send the file to a customer" : "Download the file for a customer"; // the hover follows the label (F102)
+    var many = !!lbAllFiles || lbSel.isOn(); // a multi-file preview or a pick sends several (F053), like the model card's item
+    var base = canWebShare() ? (many ? "External — send the files" : "External — send the file") : (many ? "External — download the files" : "External — download the file");
+    lbShareExtBtn.title = canWebShare() ? (many ? "Send the files to a customer" : "Send the file to a customer") : (many ? "Download the files for a customer" : "Download the file for a customer"); // the hover follows the label (F102)
     lbShareExtBtn.disabled = !!on;
     lbShareExtBtn.innerHTML = SHAREICON + '<span>' + (on ? "Preparing…" : lbShareReady ? "Files ready — send" : base) + '</span>';
   }
@@ -8331,9 +7819,10 @@
   // the file in hand and the sheet opens inside the tap's activation window.
   // Not videos, not past 15 MB, and only after a moment on the file (F045): a phone held every preview in memory in full.
   // Those still share — they download on the Share tap instead.
+  // Not desktops (decision 7a, F086): every preview there fetched the file a second time, and an image its whole original.
   var PREFETCH_MAX_BYTES = 15 * 1024 * 1024;
   function prefetchShareFile(fileUrl, dl, name, size, mime) {
-    if (!dl || !(navigator.canShare && navigator.share)) return;
+    if (!dl || !shareTouch || !(navigator.canShare && navigator.share)) return;
     if (/^video\//i.test(mime || "") || (size && size > PREFETCH_MAX_BYTES)) return;
     var key = shareKeyOf([fileUrl]);
     if (shareCacheGet(key)) return;
@@ -8358,9 +7847,20 @@
         plan.setAside > 0 ? ' Only the first ' + MODEL_SHARE_CAP + ' were attached — use Download selected for the rest.' : '');
       return;
     }
-    var f = lbFile;
+    // A multi-file preview sends ALL its files, as the no-Web-Share path downloads all of them (F002): sharing only the
+    // file on screen sent half a flyer with no word about the rest.
+    if (lbAllFiles && lbGalEntries && lbGalEntries.length >= 2 && navigator.canShare && navigator.share) {
+      var planAll = window.PF.selectModelShareFiles(lbGalEntries, { cap: MODEL_SHARE_CAP, renderResources: [] });
+      shareFileEntries(planAll.files, lb.querySelector(".lb-title").textContent, function (on, n, ready) { setShareBusy(on, ready); },
+        planAll.setAside > 0 ? ' Only the first ' + MODEL_SHARE_CAP + ' were attached — use Download for the rest.' : '');
+      return;
+    }
+    var f = lbFile, seq0 = lb._seq;
     if (!f || (!f.downloadUrl && !f.fileUrl)) return;
     if (!(navigator.canShare && navigator.share)) { downloadCurrent(); return; } // no Web Share → the download path
+    // Still the file on screen? By URL and preview, not by object: a gallery re-shows the same file as a NEW lbFile when
+    // it finishes resolving, and the object test left Share stuck on "Preparing…" (F001).
+    function stillShown() { return !!lbFile && lbFile.fileUrl === f.fileUrl && lb._seq === seq0 && !lb.hidden; }
     var key = shareKeyOf([f.fileUrl]), cached = shareCacheGet(key);
     function send(file, name) {
       shareCachePut(key, [file]);
@@ -8375,12 +7875,12 @@
       try { file = new File([blob], name || f.name || "file", { type: blob.type || "application/octet-stream" }); } catch (e) {}
       // The rep moved to another file while this one downloaded: keep it for a later tap, never open the sheet with a
       // file that is no longer on screen (F035).
-      if (lbFile !== f) { if (file) shareCachePut(key, [file]); return; }
+      if (!stillShown()) { if (file) shareCachePut(key, [file]); setShareBusy(false); return; }
       setShareBusy(false);
       if (file && navigator.canShare({ files: [file] })) send(file, name);
       else saveBlob(blob, name || f.name); // device can't share files → just save it
     }
-    function fail() { if (lbFile !== f) return; setShareBusy(false); downloadCurrent(); } // blob unreadable → the robust download path, for the file still shown
+    function fail() { if (!stillShown()) { setShareBusy(false); return; } setShareBusy(false); downloadCurrent(); } // blob unreadable → the robust download path, for the file still shown
     function viaFresh() {
       freshDownloadUrl(f.fileUrl).then(function (r) {
         if (!r.url) return fail();
@@ -8448,8 +7948,15 @@
     return entries;
   }
   function setModelShareBusy(btn, on, n, ready) {
-    if (!btn) return; btn.disabled = !!on || (modelSel.isOn() && !modelSel.count());
-    btn.innerHTML = SHAREICON + '<span>' + (on ? ("Preparing" + (n ? " " + n + " file" + (n === 1 ? "" : "s") : "") + "…") : ready ? "Files ready — send" : modelExtBase()) + '</span>';
+    if (!btn) return;
+    // The item is about to be disabled under the keyboard: hand focus to its menu's Share trigger first, so the menu's
+    // close finds it and the user stays where they were (F052). Outside a menu, wait for the item to come back.
+    if (on && document.activeElement === btn) {
+      var w = btn.closest(".res-share-wrap"), trig = w && w.querySelector("button.res-share");
+      if (trig && trig !== btn) trig.focus(); else focusWhenEnabled(btn);
+    }
+    btn.disabled = !!on || (modelSel.isOn() && !modelSel.count());
+    btn.innerHTML = SHAREICON + '<span>' + (on ? ("Preparing" + (n ? " " + n + " file" + (n === 1 ? "" : "s") : "") + "…") : ready ? "Files ready — send" : (btn._pfRestLabel || modelExtBase())) + '</span>';
   }
   // The External item's resting label: honest about what the device will do.
   function modelExtBase() { return (navigator.canShare && navigator.share) ? "External — send the files" : "External — download the files"; }
@@ -8474,9 +7981,18 @@
     b.innerHTML = SHAREICON + '<span>Share</span>' + LB_CARET;
     var menu = document.createElement("div"); menu.className = "lb-more-menu"; menu.id = id; menu.hidden = true;
     menu.appendChild(copyBtn); menu.appendChild(extBtn);
+    var dlBtn = null;
+    if (!shareTouch && canWebShare()) { // a desktop's share sheet may not reach the rep's mail client: keep a way to save them all (decision 8a, F105)
+      dlBtn = document.createElement("button"); dlBtn.type = "button"; dlBtn.className = "share-pack res-share-dl";
+      dlBtn._pfRestLabel = "External — download the files";
+      dlBtn.title = "Download " + m + "'s files for a customer";
+      dlBtn.innerHTML = SHAREICON + '<span>' + dlBtn._pfRestLabel + '</span>';
+      dlBtn.addEventListener("click", function () { downloadModelFiles(m, dlBtn); });
+      menu.appendChild(dlBtn);
+    }
     wrap.appendChild(b); wrap.appendChild(menu);
     lbDisclosure(b, menu);
-    return { wrap: wrap, btn: b, copyBtn: copyBtn, extBtn: extBtn };
+    return { wrap: wrap, btn: b, copyBtn: copyBtn, extBtn: extBtn, dlBtn: dlBtn };
   }
   function shareModelExternal(m, btn) {
     if (!(navigator.canShare && navigator.share)) { downloadModelFiles(m, btn); return; }
@@ -8484,6 +8000,13 @@
   }
   // No Web Share on this device (Firefox, a desktop without a share sheet): the same file plan as the share,
   // saved one by one so the rep can attach them to an email (owner decision 6, F151). Same cap, same Select filter.
+  // The files a multi-download could not start, as links the person can click (their own activation always works):
+  // up to 8, then "and N more". urlOf picks the SharePoint address from an entry.
+  function unsavedLinks(list, urlOf) {
+    return list.slice(0, 8).map(function (f) {
+      return '<a href="' + escapeAttr(safeUrl(urlOf(f)) || "#") + '" target="_blank" rel="noopener">' + escapeHtml(f.name || f.resource || "file") + '</a>';
+    }).join(", ") + (list.length > 8 ? ' and ' + (list.length - 8) + ' more' : '');
+  }
   function downloadModelFiles(m, btn) {
     var entries = gatherModelShareEntries(m);
     if (modelSel.isOn()) entries = entries.filter(function (e) { return modelPickKeep(e, modelSel, curSplit); }); // picks of both cards (5a)
@@ -8493,7 +8016,7 @@
     if (!plan.files.length) { showToast('<span>No files to download for ' + escapeHtml(m) + ' yet.</span>'); return; }
     if (!window.PF_getToken) { showToast('<span>Please sign in again to download.</span>'); return; }
     setModelShareBusy(btn, true, plan.files.length);
-    var saved = 0, failed = 0, total = plan.files.length;
+    var saved = 0, failed = 0, total = plan.files.length, unsaved = [];
     window.PF_getToken().then(function (token) {
       var bearer = "Bearer " + token;
       // Sequential with a small gap so a burst of saves doesn't trip the browser's download throttle (as downloadAll).
@@ -8503,7 +8026,7 @@
             if (!r || !r.full) throw new Error("no url");
             return fetchTimeout(r.full, {}, 30000).then(function (res) { if (!res.ok) throw new Error("download " + res.status); return res.blob(); })
               .then(function (b) { saveBlob(b, r.name || e.name || "file"); saved++; });
-          }).catch(function () { failed++; });
+          }).catch(function () { failed++; unsaved.push(e); }); // named in the toast (F013)
         }).then(function () { return new Promise(function (res) { setTimeout(res, 250); }); });
       }, Promise.resolve());
     }).then(function () {
@@ -8511,7 +8034,8 @@
       var note = modelShareNote(plan, "Download");
       if (saved) logShare(true, m, saved, "download");
       if (failed) logShare(false, m, failed, "download");
-      if (failed) showError(DLALLICON + '<span>Started ' + saved + ' of ' + total + ' download' + (total === 1 ? '' : 's') + ' — couldn’t download ' + failed + '. Open the resource and use Download for ' + (failed === 1 ? 'it' : 'them') + '.' + note + '</span>', 12000);
+      // Which files, as links — the plan spans up to 11 types, so "open the resource" named nothing a rep could find (F013, F096)
+      if (failed) showError(DLALLICON + '<span>Started ' + saved + ' of ' + total + ' download' + (total === 1 ? '' : 's') + ' — couldn’t download ' + failed + ' — open ' + (failed === 1 ? 'it' : 'them') + ' in SharePoint: ' + unsavedLinks(unsaved, function (e) { return e.url; }) + '.' + note + '</span>', 12000);
       else downloadStartedToast(saved, m, note); // F136, decision 3a: "Started", with the multi-download notes
     }, function () { setModelShareBusy(btn, false); logShare(false, m, plan.files.length, "could not download"); showError('<span>Couldn’t download these files just now. Open a file and use Download instead.</span>', 7000); }); // F079
   }
@@ -8616,8 +8140,10 @@
   var DLALLICON = svg('<path d="M12 3v9"/><path d="m8 9 4 3 4-3"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>');
   var lbDownloadAllBtn = document.getElementById("lbDownloadAllBtn");
   var lbAllFiles = null; // set by buildGallery for a 2+ file set; null for a single-file preview
+  var lbDlAllSeq = null; // the preview a Download-all run belongs to while it runs (F011): its own flag, not the button's state
   function setDownloadAllLabel(txt, busy) {
     if (!lbDownloadAllBtn) return;
+    if (!busy && lbDlAllSeq !== null && lbDlAllSeq === lb._seq) return; // a late-resolving item must not re-enable a running Download all (F011)
     lbDownloadAllBtn.disabled = !!busy;
     lbDownloadAllBtn.innerHTML = DLALLICON + '<span>' + txt + '</span>';
   }
@@ -8632,23 +8158,28 @@
     // itself as collapsed.
     if (lbDownloadBtn) { if (lbAllFiles) lbDownloadBtn.setAttribute("aria-expanded", "false"); else { lbDownloadBtn.removeAttribute("aria-expanded"); lbDlDisc.close(false); } }
     lbDownloadLabel(lbDlBusy);
+    lbShareExtLabel(lbShareBusy); // singular or plural follows the file count (F053)
   }
   // Paint the three header actions for the current selection state (labels + the empty-pick disable).
   function syncLbSelLabels() {
     var on = lbSel.isOn(), n = lbSel.count();
     if (lbAllFiles) setDownloadAllLabel("All " + lbAllFiles.length + " files", false); // the menu item is static; the visible button carries the selection
     if (!lbShareBusy) setShareBusy(false, lbShareReady);
-    if (lbDownloadBtn && !lbDlBusy) { lbDownloadLabel(false); lbDownloadBtn.disabled = !lbDlReady || (on && !n); }
+    if (lbDownloadBtn && !lbDlBusy && !(lbDlAllSeq !== null && lbDlAllSeq === lb._seq)) { lbDownloadLabel(false); lbDownloadBtn.disabled = !lbDlReady || (on && !n); }
     if (lbCopyBtn) { lbCopyLabel(); lbCopyBtn.disabled = on && !n; }
   }
   function downloadAll() {
     if (!lbAllFiles || !lbAllFiles.length) return;
-    if (lbDownloadAllBtn && lbDownloadAllBtn.disabled) return; // a run in progress must not be restarted under itself (F217)
+    if (lbDlAllSeq !== null && lbDlAllSeq === lb._seq) return; // a run in progress must not be restarted under itself (F217, F011)
     var seq = lb._seq; // the preview this run belongs to — a newer preview keeps its own button untouched (F335)
     // Download selected: the picked tiles (strip order); otherwise every file, as before.
     var files = lbSel.isOn() ? lbSel.pick(lbGalKeys || []).map(function (i) { return lbAllFiles[i]; }).filter(Boolean) : lbAllFiles.slice();
+    var title = (lb.querySelector(".lb-title") || {}).textContent || ""; // read now: the preview may be gone when the run ends
     if (!files.length) return;
     var total = files.length, saved = 0, failed = 0, unsaved = [];
+    // The menu has already handed focus back to the trigger, which the run is about to disable: keep it there (F052).
+    var focusKept = false;
+    lbDlAllSeq = seq;
     // Bound every download: without a timeout a stalled Graph URL left the button stuck on "Saving…"
     // and that state leaked into the next preview.
     function fetchBlob(url) { return fetchTimeout(url, {}, 30000).then(function (r) { if (!r.ok) throw new Error("download " + r.status); return r.blob(); }); }
@@ -8667,25 +8198,24 @@
     }
     // Sequential with a small gap so a rapid burst of saves doesn't trip the browser's download throttle.
     files.reduce(function (chain, f, i) {
-      return chain.then(function () { if (lb._seq === seq && !lb.hidden) { setDownloadAllLabel("Downloading " + (i + 1) + "/" + total + "…", true); if (lbDownloadBtn) { lbDownloadBtn.disabled = true; lbDownloadBtn.innerHTML = DLICON + '<span>Saving ' + (i + 1) + '/' + total + '…</span>'; } } return one(f); })
+      return chain.then(function () { if (lb._seq === seq && !lb.hidden) { setDownloadAllLabel("Downloading " + (i + 1) + "/" + total + "…", true); if (lbDownloadBtn) { if (!focusKept && document.activeElement === lbDownloadBtn) { focusKept = true; focusWhenEnabled(lbDownloadBtn); } lbDownloadBtn.disabled = true; lbDownloadBtn.innerHTML = DLICON + '<span>Downloading ' + (i + 1) + '/' + total + '…</span>'; } } return one(f); })
         .then(function () { return new Promise(function (res) { setTimeout(res, 250); }); });
     }, Promise.resolve()).then(function () {
-      if (lb._seq !== seq || lb.hidden) return; // the person moved on — never relabel the next gallery's button (F335)
-      syncLbSelLabels();
+      if (lbDlAllSeq === seq) lbDlAllSeq = null;
+      // The person moved on: never relabel the next gallery's button (F335) — but still report the run, since toasts are
+      // global and the failure links point at SharePoint, not at the preview (F012).
+      if (lb._seq === seq && !lb.hidden) syncLbSelLabels();
       // A phone hands each file to its own prompt and a desktop asks once to allow multiple downloads, so "Saved N of N"
       // was a claim (F156): the same "Started" toast as the model card's download (F136, decision 3a).
+      if (saved) logShare(true, title, saved, "download"); // decision 6a, F057, partial runs included
       if (!failed) { downloadStartedToast(saved, "", ""); return; }
       // Hand the failures back as real LINKS instead of firing window.open from here. By this point the
       // user's click is long spent, so the browser blocks these as popups — and the old toast reported
       // them as "opened in SharePoint" when nothing had opened at all. A link the user clicks carries its
       // own activation, so it always works.
-      var links = unsaved.slice(0, 8).map(function (f) {
-        return '<a href="' + escapeAttr(safeUrl(f.fileUrl) || "#") + '" target="_blank" rel="noopener">' + escapeHtml(f.name || "file") + '</a>';
-      }).join(", ");
-      logShare(false, (lb.querySelector(".lb-title") || {}).textContent || "", failed, "download");
+      logShare(false, title, failed, "download");
       showError(DLALLICON + '<span>Started ' + saved + ' of ' + total + ' downloads. Couldn’t download ' + failed +
-        ' — open ' + (failed === 1 ? "it" : "them") + ' in SharePoint: ' + links +
-        (unsaved.length > 8 ? ' and ' + (unsaved.length - 8) + ' more' : '') + '.</span>', 15000);
+        ' — open ' + (failed === 1 ? "it" : "them") + ' in SharePoint: ' + unsavedLinks(unsaved, function (f) { return f.fileUrl; }) + '.</span>', 15000);
     });
   }
   if (lbDownloadAllBtn) lbDownloadAllBtn.addEventListener("click", downloadAll);
@@ -8695,6 +8225,7 @@
   // React to back/forward navigation and externally pasted links.
   window.addEventListener("hashchange", function (e) {
     if (_internalHash) { _internalHash = false; return; }
+    if (_pvHref && e.oldURL === _pvHref && e.newURL === _pvBase) return; // Back out of a preview: the page behind it is already right (F085)
     // Before the catalog is in, a hash can't be judged — and one DOES arrive then: MSAL restores the
     // pre-sign-in URL (its replaceHash) while handling the redirect, so a colleague opening a shared
     // model link signed-out landed here against an EMPTY catalog, was told the link was "no longer in the
@@ -8814,10 +8345,16 @@
     return "Home / catalog";
   }
   var bugResourceUrl = null; // set by "Flag" so the report links the exact previewed file (preview is closed before submit)
+  var bugFlag = null; // { title, file } while the box is "Flag this file" (F064); the marker is added when it is sent
   var bugPrefill = ""; // what openBug put in the box itself — never saved back as a "draft" (F325)
-  function openBug(prefill, resourceUrl) {
+  function openBug(prefill, resourceUrl, flag) {
     if (!bugModal) return;
     bugResourceUrl = resourceUrl || null;
+    // "Flag as outdated" gets its own heading, question and context line, and no machine marker in the rep's own text (F064).
+    bugFlag = flag || null;
+    var bt = document.getElementById("bugmTitle"), bl = bugModal.querySelector(".bugm-label");
+    if (bt) bt.textContent = bugFlag ? "Flag this file" : "Report a problem";
+    if (bl) bl.textContent = bugFlag ? "What’s outdated or wrong?" : "What went wrong?";
     // Restore an unsent draft rather than wiping it. A backdrop mis-click used to discard a long report
     // silently, and reopening started from blank. An explicit prefill (the "report this file" path) wins.
     // A leftover "[Content flag] …" marker is a flag the user abandoned, not a report in progress — a
@@ -8825,7 +8362,8 @@
     bugPrefill = prefill || "";
     bugText.value = prefill || (bugDraft && !/^\[Content flag\]/.test(bugDraft) ? bugDraft : "");
     var ctx = document.getElementById("bugCtx");
-    if (ctx) ctx.textContent = "We’ll automatically include where you are (" + bugContext() + ") and your name and email so we can follow up.";
+    if (ctx) ctx.textContent = bugFlag ? "We’ll include the file (" + bugFlag.file + ") and your name and email."
+      : "We’ll automatically include where you are (" + bugContext() + ") and your name and email so we can follow up.";
     bugSubmit.disabled = false; bugSubmit.textContent = "Send report";
     bugModal.hidden = false;
     a11yModal.open(bugModal.querySelector(".bugm-panel"), bugText);
@@ -8836,13 +8374,15 @@
   // surface stale content without new infrastructure.
   var lbFlagBtn = document.getElementById("lbFlagBtn");
   if (lbFlagBtn) lbFlagBtn.innerHTML = FLAGICON + '<span>Flag as outdated</span>';
-  if (lbFlagBtn) lbFlagBtn.addEventListener("click", function () {
+  if (lbFlagBtn) lbFlagBtn.addEventListener("click", function () { flagPreview(""); });
+  function flagPreview(prefill) {
     var pr = previewingResource(); // capture BEFORE closing the preview — previewingResource() reads the open lightbox
     var title = ((lb && lb.querySelector(".lb-title")) || {}).textContent || "this resource";
     var rurl = pr ? resourceShareUrl(pr.model, pr.resource) : null;
+    var file = pr ? pr.resource + " · " + pr.model : title;
     closePreview();
-    openBug("[Content flag] " + title + " — ", rurl);
-  });
+    openBug(prefill, rurl, { title: title, file: file });
+  }
   // PM-only "Manage placements": open the document panel for the file currently in the preview. Revealed
   // for PMs once /api/me confirms status (see below). Derive the file + resource DIRECTLY from the live
   // lightbox (lbFile is set on every open path; the resource comes from lbShare when present, else parsed
@@ -8863,7 +8403,7 @@
   });
   // Whatever is in the box when the modal closes, unless it was sent. Cleared on a successful submit.
   var bugDraft = "";
-  function closeBug() { if (bugModal) { bugDraft = bugText ? (bugText.value === bugPrefill ? "" : bugText.value) : ""; bugModal.hidden = true; a11yModal.close(bugModal.querySelector(".bugm-panel")); } }
+  function closeBug() { if (bugModal) { bugDraft = bugFlag ? "" : bugText ? (bugText.value === bugPrefill ? "" : bugText.value) : ""; /* a flag is not a report draft */ bugModal.hidden = true; a11yModal.close(bugModal.querySelector(".bugm-panel")); } }
   if (bugFab) { bugFab.innerHTML = BUGICON; bugFab.addEventListener("click", function () { openBug(); }); }
   var tourBtn = document.getElementById("tourBtn");
   // Like the tabs and the logo, ? asks before throwing away a PM's staged edits (F007).
@@ -8894,7 +8434,9 @@
       var pr = previewingResource();
       // A search keeps its query in the hash; the report needs the route, not the words (F134).
       var pageUrl = pr ? resourceShareUrl(pr.model, pr.resource) : (bugResourceUrl || (/^#q=/.test(location.hash) ? location.origin + location.pathname + "#q=[search]" : location.href));
-      var payload = { description: desc, page_url: pageUrl, context: bugContext() };
+      // A flag carries its marker and the file, added here rather than typed into the rep's box (F064).
+      var payload = bugFlag ? { description: "[Content flag] " + bugFlag.title + " — " + desc, page_url: pageUrl, context: "Flag: " + bugFlag.file }
+        : { description: desc, page_url: pageUrl, context: bugContext() };
       apiFetch("/api/report-bug", { method: "POST", body: payload }).then(function () {
         if (bugText) bugText.value = ""; // sent — drop the draft so the next report starts clean
         closeBug();
@@ -8928,7 +8470,13 @@
       strayLinks: arr(d.strayLinks),
       dupeResourceRows: arr(d.dupeResourceRows),
       nestedRows: arr(d.nestedRows),
-      orphanRows: arr(d.orphanRows)
+      orphanRows: arr(d.orphanRows),
+      // Links SharePoint refuses to share (the file exists), from the nightly check, with days refused (F072b).
+      refusedLinks: Object.keys((data && data.healthRefused) || {}).map(function (k) {
+        var r = data.healthRefused[k] || {}, cut = k.lastIndexOf("::");
+        var first = Date.parse(r.firstSeen || ""), today = Date.parse(window.PF.dayOf(Date.now()));
+        return { model: k.slice(0, cut), rss: k.slice(cut + 2), url: r.url || "", days: isNaN(first) ? 0 : Math.max(1, Math.round((today - first) / 86400000) + 1) };
+      })
     };
   }
   // The outage box's Sign out: the same Hub-only sign-out the user chip performs (signin.js owns it), so there
@@ -9019,7 +8567,7 @@
       // self-heals on the next good refresh. Only a cold first load (nothing to fall back to) shows the hard
       // "couldn't load" screen.
       if (catalogLoaded) {
-        if (!catalogStale) showToast(svg(ICONS.alert) + '<span>Couldn’t refresh just now — showing the last loaded data. It’ll update on its own shortly.</span>', 6000, null, true);
+        if (!catalogStale && !(err && err.code === "session_expired") && !(opts && opts.reportsFailure)) showToast(svg(ICONS.alert) + '<span>Couldn’t refresh just now — showing the last loaded data. It’ll update on its own shortly.</span>', 6000, null, true);
         catalogStale = true;
       } else {
         catalogError = true; catalogDenied = (err && err.status === 403); // 403 = this account, not an outage
@@ -9068,7 +8616,7 @@
     var meP = fetchMe()
       .catch(function () { return fetchMe(); }) // one retry — a transient blip shouldn't hide a PM's tools
       .then(function (me) { window.PF_isPM = !!(me && me.isPM); PF_ADMIN_ALERTS = (me && Array.isArray(me.alerts)) ? me.alerts : []; PF_serverFavs = (me && Array.isArray(me.favorites)) ? me.favorites : null; })
-      .catch(function () { window.PF_isPM = false; PF_ADMIN_ALERTS = []; meFailed = true; })
+      .catch(function () { window.PF_isPM = false; PF_ADMIN_ALERTS = []; meFailed = true; try { _pmUnconfirmed = localStorage.getItem("pf-pm") === "1"; } catch (e) {} })
       .then(function () {
         if (isPM()) {
           var pmTabs = document.querySelectorAll('.vtab[data-view="progress"], .vtab[data-view="metrics"], .vtab[data-view="admin"]');
@@ -9092,7 +8640,10 @@
     function maybeStartTour() {
       var done = null; try { done = localStorage.getItem(TOUR_DONE_KEY); } catch (e) { done = "1"; }
       // A rep who already opened a family or product while sign-in finished is not interrupted (F065).
-      var browsing = !!sel.prod || Object.keys(openFams).some(function (k) { return openFams[k]; });
+      // …nor one who opened a preview (a What's New card or an Other Collateral file selects no product), a dialog, or went
+      // anywhere at all: the address is compared NOW, not as it was at boot (F039).
+      var browsing = !!sel.prod || Object.keys(openFams).some(function (k) { return openFams[k]; }) ||
+        (lb && !lb.hidden) || (bugModal && !bugModal.hidden) || (pfConfirmEl && !pfConfirmEl.hidden) || !/^#?\/?$/.test(location.hash || "");
       if (!browsing && tourShouldAutoStart(bootHash, done, view, searchInput ? searchInput.value.trim() : "")) startTour({ auto: true });
     }
     // Read the landing hash BEFORE applyHash runs. applyHash can CLEAR it — a deep link to something that

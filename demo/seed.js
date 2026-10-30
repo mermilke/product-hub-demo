@@ -193,11 +193,6 @@
     skip: [], noAuto: []
   };
   var orphans = [{ resource: "Renders", file: "Mystery Egg Warmer.jpg", folderUrl: snugFolder, detail: "in a shared folder, matches no model" }];
-  var unsorted = [
-    { id: "9001", name: "Goblet Rack Twelve lifestyle.jpg", url: file("Uploads/Goblet Rack Twelve lifestyle.jpg", "photo:goblet-rack"), fileId: "demo-9001", resource: "Renders", folder: u("Uploads"), addedBy: "wren@grumbleton.example", addedAt: null },
-    { id: "9002", name: "Ashweave rug in the hall.jpg", url: file("Uploads/Ashweave rug in the hall.jpg", "photo:ashweave"), fileId: "demo-9002", resource: "In-Store Images", folder: u("Uploads"), addedBy: "bramble@grumbleton.example", addedAt: null },
-    { id: "9003", name: "Trophy Rack Six Cut Sheet v2.pdf", url: file("Uploads/Trophy Rack Six Cut Sheet v2.pdf", "cut:Trophy Rack Six"), fileId: "demo-9003", resource: "Cut Sheet", folder: u("Uploads"), addedBy: "wren@grumbleton.example", addedAt: null }
-  ];
 
   var bugReports = [
     { id: "501", created_at: null, description: "The Hoardmaster spec sheet says “not rated for gems”. My gems are upset.", reporter_name: "Sir Reginald (retired knight)", reporter_email: "reginald@grumbleton.example", context: "Hoardmaster 3000 · Spec Sheet", page_url: "/#/Hoard%20Management/Coin%20Pushers/Hoardmaster/Hoardmaster%203000/Spec%20Sheet", status: "new" },
@@ -212,7 +207,7 @@
   return {
     catalog: catalog, links: links, na: na, health: health, files: files, folders: folders, BROKEN_URL: BROKEN_URL,
     healthMoved: healthMoved, healthRepaired: healthRepaired, sampleFolderUrl: gemFolderUrl,
-    placements: placements, orphans: orphans, unsorted: unsorted, bugReports: bugReports,
+    placements: placements, orphans: orphans, bugReports: bugReports,
     aliases: [{ from: "coin shover", to: "coin pusher" }], handledMisses: [],
     user: { email: "wren@grumbleton.example", name: "Wren Grumbleton" }
   };

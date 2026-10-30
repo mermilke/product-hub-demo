@@ -77,6 +77,15 @@
     return re;
   }
   function normModel(s) { return String(s).toLowerCase().replace(/\.[a-z0-9]+$/i, "").replace(/[^a-z0-9]/g, ""); }
+  // A word after the number is a sibling's code only if it could be one (F018): real runs are short and never repeat a code
+  // ("tilt", "drill", "will" do), and a handful of ordinary words spell with code letters ("lid", "pod") unless typed as capitals.
+  var CODE_SPELLED_WORDS = { lid: 1, pod: 1, dirt: 1, wild: 1, lit: 1, wit: 1, tic: 1, rid: 1 };
+  function looksLikeCodeRun(lower, raw) {
+    var run = lower.length <= 4 ? parseCodeRun(lower) : null;
+    if (!run) return false;
+    if (run.some(function (c, i) { return run.indexOf(c) !== i; })) return false;
+    return !CODE_SPELLED_WORDS[lower] || String(raw) === lower.toUpperCase();
+  }
   function matchesModel(name, model) {
     name = String(name == null ? "" : name).replace(/_+/g, " "); // underscores are separators on the raw-name path too
     var re = modelRe(model);
@@ -85,7 +94,7 @@
       if (!m) return false;
       if (!re.pfBase) return true;
       var follow = String(m[1] || "").toLowerCase(), next = String(m[2] || "").toLowerCase(); // "Fireproof": the variant word is one further on
-      return !(follow && (parseCodeRun(follow) || DECODED_WORDS[follow] || (follow === "for" && DECODED_WORDS[next])));
+      return !(follow && (looksLikeCodeRun(follow, m[1]) || DECODED_WORDS[follow] || (follow === "for" && DECODED_WORDS[next])));
     }
     var mdl = normModel(model);    // descriptive models: normalized filename must START with the model name
     return mdl.length > 0 && normModel(name).indexOf(mdl) === 0;
@@ -272,12 +281,19 @@
           if (score > bestScore) {
             bestScore = score;
             best = { cat: c.name, fam: f.name, prod: p.name, model: m0, products: f.products.map(function (x) { return x.name; }),
-              modelCount: models.length, hasShared: hasShared, hasRequest: hasRequest };
+              modelCount: models.length, hasShared: hasShared, hasRequest: hasRequest,
+              sharedTypes: RESOURCES.filter(function (r) { return !!split.shared[r]; }) }; // what the top card really holds (F046)
           }
         });
       });
     });
     return best;
+  }
+  // Tour step 4's example: the types the picked product's top card really holds, at most two ("like the Product Overview",
+  // "like the Flyer and the Warranty"). It said "the flyer and the warranty" whatever the card showed (F046).
+  function tourSharedSentence(types) {
+    var t = (types || []).slice(0, 2);
+    return "The top card holds the files that are the same for the whole product" + (t.length ? ", like the " + t.join(" and the ") : "") + ".";
   }
   // Split a "SP Folder URL" cell into its individual link URLs. The legacy fat-cell format packs several
   // URLs into one cell separated by whitespace, so the naive split is /\s+/ — but that ALSO tears a single
@@ -479,6 +495,9 @@
     var out = [];
     stripPossessive(q).toLowerCase().split(/[^a-z0-9]+/).forEach(function (t) {
       if (!t) return;
+      // Not a model code (F102): a paper size is one word (dropped as filler below, or "a4" read as code 4), and a
+      // single digit inside a word stays inside it ("Sir Reginald"). "hoardmaster4i" is still a line prefix + code.
+      if (/^a[345]$/.test(t) || (/^[a-z]+[0-9][a-z]+$/.test(t) && !LINE_PREFIX[t.replace(/[0-9].*$/, "")])) { out.push(t); return; }
       // …then at digit↔letter boundaries, so a glued "400i" separates into "400" + "i".
       t.replace(/([0-9])(?=[a-z])|([a-z])(?=[0-9])/g, "$1$2 ").split(" ").forEach(function (p) { if (p) out.push(p); });
     });
@@ -505,7 +524,7 @@
                  hi: 1, hey: 1, hello: 1, pls: 1, plz: 1, im: 1, like: 1,
                  // what the rep wants it AS, not what it is (F128, decision 8a): "hoardmaster 3000 x spec sheet pdf" read
                  // "pdf" as a required word, found nothing, and logged a miss no PM alias could neutralise
-                 pdf: 1, pdfs: 1, file: 1, files: 1, doc: 1, docs: 1, document: 1, documents: 1,
+                 a3: 1, a4: 1, a5: 1, pdf: 1, pdfs: 1, file: 1, files: 1, doc: 1, docs: 1, document: 1, documents: 1,
                  download: 1, downloads: 1, link: 1, links: 1 };
   // Contraction tails the tokenizer's punctuation split leaves behind: "i'm" → "i m", "i'd" → "i d".
   var PRONOUN_TAIL = { m: 1, d: 1, ll: 1, ve: 1 };
@@ -524,13 +543,20 @@
         if (!(LINE_PREFIX[prev] || /^[0-9]+$/.test(prev))) { if (PRONOUN_TAIL[t[i + 1]]) i++; continue; }
       }
       if (FILLER[t[i]]) continue;
+      if (t[i] === "letter" && t[i - 1] === "us") continue; // the other paper size (F102)
       out.push(t[i]);
     }
     return out;
   }
+  // "multistack" finds "Multi-Stack" (F103): a hyphenated word is searchable glued too, in the exact pass and the typo pass.
+  function glueHyphens(hay) {
+    if (hay.indexOf("-") === -1) return hay;
+    var glued = hay.match(/[a-z]+(?:-[a-z]+)+/g);
+    return glued ? hay + " " + glued.join(" ").replace(/-/g, "") : hay;
+  }
   function searchMatch(tokens, name, rest, codeSource) {
     var nm = String(name || "").toLowerCase();
-    var hay = (nm + " " + String(rest || "")).toLowerCase();
+    var hay = glueHyphens((nm + " " + String(rest || "")).toLowerCase());
     var code = String(codeSource == null ? name : codeSource || "").toLowerCase();
     var matched = 0;
     for (var i = 0; i < (tokens || []).length; i++) {
@@ -555,7 +581,7 @@
   // Without it the fallback re-opens the hole the exact path just closed: the fallback only runs when exact
   // found nothing, which is precisely when a stricter exact match has just rejected the wrong-suffix row.
   function fuzzyPenalty(query, haystack, name) {
-    var hay = String(haystack).toLowerCase();
+    var hay = glueHyphens(String(haystack).toLowerCase());
     var nm = name == null ? hay : String(name).toLowerCase();
     // A model's code run ("xdf", "xgf", "xf", "iw") is not a word to fuzzy-match: codes have their own exact path
     // (isCodeToken/codeMatches), and "video" is a couple of edits from a code — every "… video" miss landed on Hoardmaster 1000 XDF
@@ -691,7 +717,11 @@
   // Hoardmaster 3000 G, only 3000 XG / XGF): the result list is closest models, not the model typed.
   function noExactModel(hits, tokens) {
     tokens = tokens || [];
-    if (!(hits || []).length || !tokens.some(function (t) { return isCodeToken(t, tokens); })) return false;
+    if (!(hits || []).length || !tokens.some(function (t) { return isCodeToken(t, tokens) && !/^[0-9]+$/.test(t); })) return false;
+    // Only a query plainly about a coded model (F104): a line or a whole number typed, and a coded model among the hits.
+    // A one-letter shorthand beside a descriptive name ("Hoardmaster w plinth") is not a code that no model has.
+    if (!tokens.some(function (t) { return LINE_PREFIX[t] || /^[0-9]{3,}$/.test(t); })) return false;
+    if (!hits.some(function (n) { return modelCodes(n.model || n.name); })) return false;
     var tset = {}; tokens.forEach(function (t) { tset[String(t).toLowerCase()] = 1; });
     return !hits.some(function (n) {
       if (n.lvl !== "Model" && !n.live) return false;
@@ -732,6 +762,43 @@
   // truth (newest-first), so it leads; any local-only pins not yet uploaded append after. Deduped,
   // order-stable. Used on load to reconcile localStorage with /api/favorites (and to migrate local-only
   // pins up). Pure so it can be unit-tested; the caller caps the length.
+  // The "New" badge's baseline (decision 11a, F107). A visit is a session: while the last load was under VISIT_GAP_MS ago
+  // the baseline stays, so a reload keeps the badges; a longer gap makes that last load the new baseline. First visit: now,
+  // so nothing is badged. Stored values are strings or null; a device with no "seen" yet counts its old baseline as the last load.
+  var VISIT_GAP_MS = 8 * 3600 * 1000;
+  function visitStep(rawBaseline, rawSeen, now) {
+    var base = rawBaseline ? parseInt(rawBaseline, 10) : NaN, seen = rawSeen ? parseInt(rawSeen, 10) : NaN;
+    if (isNaN(base)) return { baseline: now, seen: now };
+    if (isNaN(seen)) seen = base;
+    return { baseline: now - seen > VISIT_GAP_MS ? seen : base, seen: now };
+  }
+  // The way back from a save that removed links (decision 4a, F079). saved = [{ fam, prod, resource, before: { model: [urls] | "N/A" },
+  // after: { model: [urls] | "N/A" } }]: writes "before" back, with "after" as the compare-and-swap base, so a colleague's edit
+  // since the save refuses the undo instead of being overwritten. What the save ADDED is what the undo removes: declared per model.
+  function planLinkUndo(saved) {
+    var out = [];
+    (saved || []).forEach(function (g) {
+      var assignments = {}, base = {}, byModel = {}, total = 0, any = false;
+      Object.keys(g.after || {}).forEach(function (m) {
+        if (!g.before || !Object.prototype.hasOwnProperty.call(g.before, m)) return; // no pre-image: leave this model alone
+        var was = g.before[m], now = g.after[m], wasNA = was === "N/A", nowNA = now === "N/A";
+        assignments[m] = wasNA ? "N/A" : was.join(" ");
+        any = true;
+        if (!nowNA) base[m] = now.slice(); // a model saved as N/A has no link base; the shrink guard still covers it
+        var lost = (nowNA ? 0 : countDistinctFiles(now)) - (wasNA ? 0 : countDistinctFiles(was));
+        if (lost > 0) { byModel[m] = lost; total += lost; }
+      });
+      if (any) out.push({ fam: g.fam, prod: g.prod, resource: g.resource, assignments: assignments, base: base, expectRemoved: total, expectRemovedByModel: byModel });
+    });
+    return out;
+  }
+  // One search row per shared file (decision 10a, F077). A model's own row for a file every model shares goes when the query
+  // also found the product's shared row. A query naming one model's code ("hoardmaster 3000 x flyer") finds only that model's row, so it stays.
+  function collapseSharedHits(hits) {
+    var found = {};
+    (hits || []).forEach(function (n) { if (n.sharedRow) found[n.sharedRow] = 1; });
+    return (hits || []).filter(function (n) { return !(n.sharedOf && found[n.sharedOf]); });
+  }
   function mergeFavorites(local, server, removed) {
     // `removed` = models the user un-pinned whose delete-write may not have reached the server yet. Without
     // subtracting them, this union (server ∪ local) can never represent a removal, so a failed/slow delete
@@ -1774,7 +1841,7 @@
     computeCoverage: computeCoverage, looksLikeGibberish: looksLikeGibberish, normCell: normCell,
     dupeModelNames: dupeModelNames,
     modelRe: modelRe, normModel: normModel, matchesModel: matchesModel,
-    looksLikeFolder: looksLikeFolder, canonFolderUrl: canonFolderUrl, canonFileUrl: canonFileUrl, groupRecentByProduct: groupRecentByProduct, seedFolderRows: seedFolderRows, carryFolderRowEdits: carryFolderRowEdits, dropFixedHealth: dropFixedHealth, folderDesired: folderDesired, planFolderApproval: planFolderApproval, parseSpUrl: parseSpUrl, normalizeUrl: normalizeUrl, sameFile: sameFile, splitProductDocs: splitProductDocs, pickTourPath: pickTourPath, splitCellUrls: splitCellUrls, isNACell: isNACell, lhReason: lhReason, lhTransient: lhTransient, lhBroken: lhBroken,
+    looksLikeFolder: looksLikeFolder, canonFolderUrl: canonFolderUrl, canonFileUrl: canonFileUrl, groupRecentByProduct: groupRecentByProduct, seedFolderRows: seedFolderRows, carryFolderRowEdits: carryFolderRowEdits, dropFixedHealth: dropFixedHealth, folderDesired: folderDesired, planFolderApproval: planFolderApproval, parseSpUrl: parseSpUrl, normalizeUrl: normalizeUrl, sameFile: sameFile, splitProductDocs: splitProductDocs, pickTourPath: pickTourPath, tourSharedSentence: tourSharedSentence, splitCellUrls: splitCellUrls, isNACell: isNACell, lhReason: lhReason, lhTransient: lhTransient, lhBroken: lhBroken,
     lhCheckResource: lhCheckResource, lhRunPool: lhRunPool, makeLimiter: makeLimiter,
     osaWithin: osaWithin, fuzzyThreshold: fuzzyThreshold, fuzzyPenalty: fuzzyPenalty,
     codeTokenIn: codeTokenIn, searchMatch: searchMatch, tokenizeQuery: tokenizeQuery, dayOf: dayOf, expandSearchQuery: expandSearchQuery, normAlias: normAlias, SEARCH_ALIASES: SEARCH_ALIASES,
@@ -1783,6 +1850,6 @@
     expandName: expandName, resourceFromName: resourceFromName, guessPlacement: guessPlacement, parentFolderOf: parentFolderOf,
     wiredUrlSet: wiredUrlSet, deriveWatchedFolders: deriveWatchedFolders, planFolderPlacements: planFolderPlacements,
     folderWiredSet: folderWiredSet, planPlacementWrites: planPlacementWrites, planDocumentOps: planDocumentOps, catalogSnapshotStale: catalogSnapshotStale, sameUrlSet: sameUrlSet,
-    mergeFavorites: mergeFavorites, countDistinctFiles: countDistinctFiles, shortWeek: shortWeek
+    mergeFavorites: mergeFavorites, visitStep: visitStep, planLinkUndo: planLinkUndo, collapseSharedHits: collapseSharedHits, countDistinctFiles: countDistinctFiles, shortWeek: shortWeek
   };
 });

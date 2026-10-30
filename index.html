@@ -27,6 +27,9 @@
 <link rel="preload" href="/fonts/inter-400.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/inter-600.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/inter-700.woff2" as="font" type="font/woff2" crossorigin>
+<!-- The tab labels (Barlow 700) and the brand line (600): late, they repainted the phone header twice (F041/F112). -->
+<link rel="preload" href="/fonts/barlow-semicondensed-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/barlow-semicondensed-600.woff2" as="font" type="font/woff2" crossorigin>
 <script defer src="/pf-shared.js"></script>
 <script defer src="/demo/seed.js"></script>
 <script defer src="/demo/backend.js"></script>
@@ -65,25 +68,27 @@
         <span class="brand-sub">Product Hub</span>
       </span>
     </button>
-    <label class="search" role="search">
+    <div class="search" role="search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
       <input id="searchInput" type="search" placeholder="Search a product, model, or file type…" autocomplete="off" aria-label="Search catalog">
       <button class="search-kbd" type="button" aria-pressed="true" aria-label="Keyboard shortcut: press / to jump to search. Turn it off" title="Press / to search · click to turn off"><kbd>/</kbd></button>
-    </label>
+    </div>
     <nav class="viewnav viewnav-pm-hidden" aria-label="Views"><div class="viewtabs" role="tablist" aria-label="View">
       <button class="vtab on" type="button" id="tab-catalog" data-view="catalog" role="tab" aria-selected="true" aria-controls="content">Find</button>
       <button class="vtab vtab-pm-hidden" type="button" id="tab-progress" data-view="progress" role="tab" aria-selected="false" aria-controls="content" tabindex="-1">Progress</button>
       <button class="vtab vtab-pm-hidden" type="button" id="tab-metrics" data-view="metrics" role="tab" aria-selected="false" aria-controls="content" tabindex="-1">Metrics</button>
       <button class="vtab vtab-pm-hidden" type="button" id="tab-admin" data-view="admin" role="tab" aria-selected="false" aria-controls="content" tabindex="-1">Admin</button>
     </div></nav>
+    <div class="topbar-icons"><!-- one group on mid-width screens (F066); display: contents elsewhere, so the phone order rules still apply -->
     <button class="bug-btn tour-btn" id="tourBtn" type="button" title="Take the tour" aria-label="Take the tour">?</button>
     <button class="bug-btn" id="bugFab" type="button" title="Report a bug or problem" aria-label="Report a bug or problem"></button>
     <button class="theme-toggle" id="themeToggle" title="Toggle light / dark" aria-label="Toggle theme"></button>
+    </div>
   </div>
 </header>
 
 <main>
-  <div id="content" tabindex="-1" role="tabpanel" aria-labelledby="tab-catalog"></div>
+  <div id="content" tabindex="-1"></div>
 </main>
 
 <div class="lb" id="lightbox" hidden>

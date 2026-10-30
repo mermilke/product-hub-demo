@@ -17,6 +17,9 @@
      to read with low vision (see the note on the type scale below). */
   @font-face { font-family: "Barlow Semi Condensed"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/barlow-semicondensed-600.woff2") format("woff2"); }
   @font-face { font-family: "Barlow Semi Condensed"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/barlow-semicondensed-700.woff2") format("woff2"); }
+  /* Until Barlow arrives, a stand-in as wide as it: Arial at 77% (measured on the tab labels, 700: 0.770, 600: 0.764).
+     The wider Inter used to push the phone's theme button onto a row of its own for a moment (F041/F112). */
+  @font-face { font-family: "Barlow Fallback"; src: local("Arial"), local("Helvetica"); size-adjust: 77%; }
   /* The MONO face, for model names, counts and the preview title — deliberate, and the design contract
      says keep it. It was `ui-monospace, Cascadia Mono, Consolas, SF Mono` — all SYSTEM fonts, so the
      SKUs rendered in a different typeface on every platform, exactly the problem the label face had.
@@ -38,7 +41,7 @@
     --shadow-rest: 0 1.5px 1.5px rgba(20,30,50,.04);
     --shadow-hover: 0 3px 6px rgba(20,30,50,.08), 0 24px 60px rgba(20,30,50,.12);
     --font-ui: "Inter", "Inter Fallback", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
-    --font-label: "Barlow Semi Condensed", var(--font-ui);
+    --font-label: "Barlow Semi Condensed", "Barlow Fallback", var(--font-ui);
     /* Label tracking ladder — ONE retune, tied to size. Smaller uppercase needs MORE air, not less;
        the 12 ad-hoc values this replaces ran .04-.16em with the relationship inverted in places
        (.16em at 16.5px, .04em at 16.5px). Theme-independent, so these live in :root only. */
@@ -54,7 +57,8 @@
     --r-xs: 6px; --r-chip: 9px; --r-sm: 12px; --r-ctl: 15px; --r-card: 18px; --r-lg: 21px; --r-pill: 1498.5px;
     /* Type scale (font sizes) — one source of truth; values unchanged from the hand-tuned originals. */
     /* Anything that states STATUS is floored at --fs-11 (see .lh-badge, .cov-colhead, .cov-chip-tag,
-       .wire-tag, .adm-badge, .soon-tag, .now-new, .met-handled): all-caps condensed under 16.5px is hard to read with low vision. The small
+       .adm-badge, .soon-tag, .now-new, .met-handled): all-caps condensed under 16.5px is hard to read with low vision. So do the
+       buttons a rep presses (F113): Share, Download, Open in SharePoint, Request this, Select, toast actions. The small
        sizes below remain for decorative eyebrows only. */
     --fs-8-5: 12.75px; --fs-9: 13.5px; --fs-9-5: 14.25px; --fs-10: 15px; --fs-10-5: 15.75px; --fs-11: 16.5px;
     --fs-11-5: 17.25px; --fs-12: 18px; --fs-12-5: 18.75px; --fs-13: 19.5px; --fs-13-5: 20.25px; --fs-14: 21px;
@@ -124,6 +128,7 @@
   .topbar { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1.5px solid var(--line); padding-top: env(safe-area-inset-top, 0px); }
   .topbar::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 180px; background: var(--surface); pointer-events: none; }
   .topbar-inner { max-width: 2340px; margin: 0 auto; padding: var(--sp-14) var(--sp-28); display: flex; align-items: center; gap: var(--sp-20); flex-wrap: wrap; }
+  .topbar-icons { display: contents; } /* the ?, bug and theme buttons; a real group only on mid-width screens (F066) */
   .brand { display: flex; align-items: center; gap: var(--sp-11); cursor: pointer; user-select: none; background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; border-radius: var(--r-chip); }
   .brand:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 4.5px; }
   .brand-mark { width: 57px; height: 57px; flex: none; display: grid; place-items: center; }
@@ -349,7 +354,7 @@
   .col-head-actions { display: inline-flex; align-items: center; gap: var(--sp-8); flex: none; }
   /* "Copy links" / "Share to customer" / "Select" on the model panel header. Teal on hover/after-copy.
      (The product-level "Copy all N links" was removed 2026-09-14 — one model at a time is the job.) */
-  .share-pack { display: inline-flex; align-items: center; gap: var(--sp-6); flex: none; font-family: var(--font-label); font-size: var(--fs-10-5); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: none; border: 1.5px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-4) var(--sp-10); cursor: pointer; transition: color .15s, border-color .15s; }
+  .share-pack { display: inline-flex; align-items: center; gap: var(--sp-6); flex: none; font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: none; border: 1.5px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-4) var(--sp-10); cursor: pointer; transition: color .15s, border-color .15s; }
   .share-pack svg { width: 21px; height: 21px; flex: none; }
   .share-pack:hover, .share-pack.copied { color: var(--ok-ink); border-color: var(--ok-ink); }
   /* Collapsible "what the model-name letters mean" key at the top of the model column. */
@@ -438,7 +443,7 @@
   /* Coverage tracker (product-team view) */
   /* Matches the width Find uses. This is the view with the WIDEST content (a 10-column matrix) and it
      was the one capped narrowest. */
-  .cov-view { display: flex; flex-direction: column; gap: var(--sp-16); max-width: 1812px; }
+  .cov-view { display: flex; flex-direction: column; gap: var(--sp-16); }
   .cov-summary { display: flex; align-items: center; gap: var(--sp-24); flex-wrap: wrap; padding: var(--sp-18) var(--sp-20); background: var(--surface); border: 1.5px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow-rest); }
   .cov-big { font-family: var(--font-mono); font-size: var(--fs-34); font-weight: 700; line-height: 1; color: var(--ok-ink); }
   .cov-big small { font-size: var(--fs-15); color: var(--ink-soft); font-weight: 600; margin-left: var(--sp-8); }
@@ -555,7 +560,6 @@
   .wire-help-body { margin: var(--sp-10) 0 var(--sp-2); }
   .wire-help-steps { margin: 0 0 var(--sp-10); padding-left: var(--sp-20); font-size: var(--fs-12-5); color: var(--ink-soft); line-height: 1.75; max-width: 60ch; }
   .wire-help-steps em { color: var(--accent-ink); font-style: normal; }
-  .wire-help-img { display: block; max-width: 100%; width: 1080px; border: 1.5px solid var(--line); border-radius: var(--r-sm); box-shadow: var(--shadow-rest); }
   /* PM guide (collapsible one-pager at the top of the Admin tab) */
   .pm-guide { padding: 0; }
   .pm-guide > summary { display: flex; align-items: center; gap: var(--sp-8); cursor: pointer; list-style: none; padding: var(--sp-16) var(--sp-18); font-weight: 700; font-size: var(--fs-15); user-select: none; }
@@ -614,26 +618,7 @@
   .wire-msg { font-size: var(--fs-13); color: var(--ink-soft); padding: var(--sp-6) 0; }
   .wire-msg.err { color: var(--accent-ink); }
   .wire-summary { font-size: var(--fs-12-5); color: var(--ink-faint); margin-bottom: var(--sp-6); }
-  .wire-scope { font-size: var(--fs-13); color: var(--ink); background: var(--ok-tint); border: 1.5px solid var(--ok); border-radius: var(--r-chip); padding: var(--sp-6) var(--sp-10); margin-bottom: var(--sp-8); }
-  .wire-scope b { color: var(--ok-ink); }
-  .wire-model-name { font-family: var(--font-mono); font-size: var(--fs-13); font-weight: 600; margin-bottom: var(--sp-6); }
-  .wire-model-name b { color: var(--ok-ink); }
-  .wire-unmatched .wire-model-name b { color: var(--accent-ink); }
-  .wire-none { font-size: var(--fs-12); color: var(--ink-faint); }
-  .wire-files { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
-  .wire-file { display: flex; align-items: center; gap: var(--sp-6); max-width: 345px; border: 1.5px solid var(--line); border-radius: var(--r-sm); padding: var(--sp-4) var(--sp-9) var(--sp-4) var(--sp-4); background: var(--surface-2); font-size: var(--fs-11-5); }
-  /* A child <img> is natively draggable and would HIJACK the chip's HTML5 drag (the browser drags the
-     image instead of moving the chip) and swallow clicks that involve any micro-movement. Disable image
-     drag + let pointer events fall through to the chip/opener so render thumbnails drag & click like icons. */
-  .wire-file img { width: 51px; height: 39px; object-fit: cover; border-radius: var(--r-xs); flex: none; -webkit-user-drag: none; user-select: none; pointer-events: none; }
-  .wire-ficon { width: 39px; height: 39px; display: grid; place-items: center; color: var(--ink-faint); flex: none; }
-  .wire-ficon svg { width: 22.5px; height: 22.5px; }
-  .wire-fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wire-approve { margin-top: var(--sp-14); }
-  .wire-elsewhere { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-8); margin-top: var(--sp-12); padding-top: var(--sp-10); border-top: 1.5px dashed var(--line); }
-  .wire-elsewhere-lbl { font-size: var(--fs-12-5); font-weight: 600; color: var(--ink-soft); }
-  .wire-elsewhere .wire-sel { flex: 0 1 auto; min-width: 225px; }
-  .wire-elsewhere-hint { font-size: var(--fs-12); color: var(--ink-faint); margin-top: var(--sp-6); }
   /* Files-to-place / orphans / unknown-RSS list styles (shared by the PM panels). */
   .hyg-group + .hyg-group { margin-top: var(--sp-14); padding-top: var(--sp-12); border-top: 1.5px solid var(--line); }
   .hyg-h { display: flex; align-items: center; gap: var(--sp-6); font-size: var(--fs-13); font-weight: 700; color: var(--ink); margin: 0 0 var(--sp-4); }
@@ -650,15 +635,6 @@
   .adm-alert.warn svg { color: var(--pending-fill); }
   .adm-alert.err { color: var(--ink); background: var(--accent-tint); border: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent); }
   .adm-alert.err svg { color: var(--accent); }
-  /* Flash a bucket that was just added via "Add this model" so the new drop target is unmissable. */
-  .wire-bucket.justadded { animation: bucketFlash 1.4s ease; }
-  @keyframes bucketFlash { 0%,100% { background: transparent; } 15% { background: var(--ok-tint); box-shadow: inset 0 0 0 1.5px var(--ok); } }
-  .wire-otherpath { color: var(--ink-faint); font-weight: 600; }
-  .wire-note { font-size: var(--fs-11-5); color: var(--pending); margin: var(--sp-2) 0 var(--sp-6); }
-  /* Prominent warning banner for the "adding a file freezes the auto-updating folder" trade-off. */
-  .wire-warn { display: flex; align-items: flex-start; gap: var(--sp-6); font-size: var(--fs-12); color: var(--ink); background: var(--pending-tint, color-mix(in srgb, var(--pending-fill) 14%, transparent)); border: 1.5px solid color-mix(in srgb, var(--pending-fill) 45%, transparent); border-radius: var(--r-chip); padding: var(--sp-6) var(--sp-8); }
-  .wire-warn svg { width: 22.5px; height: 22.5px; flex: none; color: var(--pending-fill); margin-top: 1.5px; }
-  .wire-none-actions { display: flex; flex-wrap: wrap; gap: var(--sp-8); margin: var(--sp-2) 0 var(--sp-9); }
   .uns-count { font-family: var(--font-mono); font-size: var(--fs-12); font-weight: 700; color: var(--ok-ink); margin-left: var(--sp-2); }
   .uns-empty { font-size: var(--fs-13); color: var(--ink-faint); padding: var(--sp-8) 0; }
   /* Coverage matrix: staged per-section link editor */
@@ -804,31 +780,11 @@
   .uns-orphan-tag { flex: none; display: inline-flex; align-items: center; line-height: 1; font-size: var(--fs-11); color: var(--pending); background: var(--pending-tint); border: 1.5px solid color-mix(in srgb, var(--pending-fill) 32%, var(--line)); border-radius: var(--r-chip); padding: var(--sp-4) var(--sp-6); white-space: nowrap; }
   .uns-folder-link { flex: none; font-size: var(--fs-12); color: var(--ok-ink); text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
   .uns-orphan-hint { flex: 1 1 360px; font-size: var(--fs-12); color: var(--ink-soft); }
-  .wire-file.existing, .wire-file.isnew { background: var(--ok-tint); border-color: color-mix(in srgb, var(--ok) 32%, var(--line)); }
-  .wire-file.folder { background: var(--surface-2); border-style: dashed; cursor: default; }
-  .wire-tag { flex: none; display: inline-flex; align-items: center; line-height: 1; font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label); text-transform: uppercase; font-weight: 700; color: var(--ok-ink); background: var(--surface); border: 1.5px solid color-mix(in srgb, var(--ok) 32%, var(--line)); border-radius: var(--r-pill); padding: var(--sp-5) var(--sp-6) var(--sp-3); }
-  .wire-tag.new { color: var(--ok-ink); border-color: color-mix(in srgb, var(--ok) 32%, var(--line)); }
-  .wire-bucket { border-top: 1.5px solid var(--line); padding: var(--sp-10) var(--sp-6); border-radius: var(--r-sm); transition: background .12s; }
-  .wire-bucket.drop { background: var(--ok-tint); box-shadow: inset 0 0 0 1.5px var(--ok); }
-  .wire-file { cursor: grab; }
-  .wire-file:hover { border-color: var(--ink-faint); }
-  .wire-file.dragging { opacity: .45; }
-  .wire-fname { flex: 1 1 auto; min-width: 0; }
-  .wire-open { display: flex; align-items: center; gap: var(--sp-6); flex: 1 1 auto; min-width: 0; border: 0; background: none; margin: 0; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
-  .wire-open:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; border-radius: var(--r-chip); }
-  /* One base for the three row-action icon buttons (it was written out three times). Each keeps its
-     own hover/focus/svg rules below, in place. */
-  .wire-move, .wire-dup, .wire-del { flex: none; border: 0; background: none; color: var(--ink-faint); cursor: pointer; padding: var(--sp-2); min-width: 36px; min-height: 36px; display: inline-grid; place-items: center; border-radius: var(--r-xs); }
-  .wire-move:hover, .wire-move[aria-expanded="true"], .wire-dup:hover { color: var(--ink); background: var(--surface); }
-  .wire-move:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 1.5px; }
-  .wire-move svg { width: 19.5px; height: 19.5px; }
+  /* The row-action remove button (the Move and Copy buttons left with the retired folder tool). */
+  .wire-del { flex: none; border: 0; background: none; color: var(--ink-faint); cursor: pointer; padding: var(--sp-2); min-width: 36px; min-height: 36px; display: inline-grid; place-items: center; border-radius: var(--r-xs); }
   /* Custom themed Move dropdown (replaces the native <select> menu so it matches the app). */
   .wire-menu { position: fixed; z-index: 200; min-width: 270px; max-width: 510px; max-height: 60vh; overflow-y: auto; background: var(--surface); border: 1.5px solid var(--line-strong); border-radius: var(--r-ctl); box-shadow: var(--shadow-hover); padding: var(--sp-5); }
   .wire-menu-head { font-family: var(--font-label); font-size: var(--fs-9-5); letter-spacing: var(--ls-label-sm); text-transform: uppercase; color: var(--ink-faint); padding: var(--sp-4) var(--sp-10) var(--sp-6); }
-  .wire-menu-item { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--ink); font: inherit; font-size: var(--fs-13); padding: var(--sp-8) var(--sp-10); border-radius: var(--r-chip); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .wire-menu-item:hover, .wire-menu-item:focus { background: var(--ok-tint); color: var(--ok-ink); outline: none; }
-  .wire-menu-item.wire-menu-none { color: var(--ink-soft); border-top: 1.5px solid var(--line); margin-top: var(--sp-4); padding-top: var(--sp-9); }
-  .wire-menu-item.wire-menu-all { color: var(--accent-ink); font-weight: 600; border-bottom: 1.5px solid var(--line); margin-bottom: var(--sp-4); padding-bottom: var(--sp-9); }
   /* Multi-select model picker (Unsorted "Sort to models" + Files-to-place) — trigger + checkbox dropdown. */
   .uns-mbtn, .ftp-mbtn { text-align: left; cursor: pointer; }
   .ftp-mbtn { min-width: 240px; }
@@ -848,23 +804,9 @@
   .uns-check:hover { background: var(--surface-2); }
   .uns-check input { flex: none; width: 22.5px; height: 22.5px; cursor: pointer; accent-color: var(--ok); }
   .uns-check-all { border-bottom: 1.5px solid var(--line); margin-bottom: var(--sp-4); padding-bottom: var(--sp-9); font-weight: 600; }
-  .wire-allfam { margin-top: var(--sp-12); }
-  /* Read as an actionable secondary option (a bordered teal button), not buried text. */
-  .wire-allfam > summary { cursor: pointer; font-size: var(--fs-13); font-weight: 600; color: var(--ok-ink); display: inline-flex; align-items: center; gap: var(--sp-8); padding: var(--sp-7) var(--sp-12); border: 1.5px solid color-mix(in srgb, var(--ok) 35%, var(--line-strong)); border-radius: var(--r-ctl); background: var(--ok-tint); list-style: none; }
-  .wire-allfam > summary::-webkit-details-marker { display: none; }
-  .wire-allfam > summary:hover { border-color: var(--ok); }
-  .wire-allfam > summary svg { width: 22.5px; height: 22.5px; }
-  .wire-allfam-body { padding-top: var(--sp-10); }
-  .wire-help-note { font-size: var(--fs-12); color: var(--ink-soft); max-width: 72ch; margin: 0 0 var(--sp-10); }
-  .wire-fam-list { display: flex; flex-direction: column; gap: var(--sp-6); margin: var(--sp-10) 0; }
-  .wire-fam-row { display: flex; align-items: center; gap: var(--sp-10); }
-  .wire-fam-file { flex: 1 1 auto; min-width: 0; font-size: var(--fs-13); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .wire-fam-file.unmatched { color: var(--pending); }
-  .wire-fam-sel { flex: 0 0 auto; max-width: 46%; }
-  .wire-dup svg { width: 19.5px; height: 19.5px; }
   .wire-del:hover { color: var(--on-accent); background: var(--accent); }
   .wire-del svg { width: 19.5px; height: 19.5px; }
-  .wire-dup:focus-visible, .wire-del:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 1.5px; }
+  .wire-del:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 1.5px; }
   /* Left panel: one box per category, stacked, each with its own header + divider */
   .col-tree { flex: 1 1 480px; min-width: 0; max-width: 780px; display: flex; flex-direction: column; gap: var(--sp-14); align-self: flex-start; }
   /* Nothing picked yet: let the category boxes use the full row instead of stacking in a 567px strip
@@ -977,7 +919,7 @@
   .res-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
   .res-name { display: block; font-weight: 600; font-size: var(--fs-13-5); }
   .res-desc { display: block; font-size: var(--fs-11-5); color: var(--ink-soft); }
-  .pill { font-family: var(--font-label); font-size: var(--fs-10-5); line-height: 1; letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 600; padding: var(--sp-6) var(--sp-10); border-radius: var(--r-pill); white-space: nowrap; display: inline-flex; align-items: center; gap: var(--sp-6); }
+  .pill { font-family: var(--font-label); font-size: var(--fs-11); line-height: 1; letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 600; padding: var(--sp-6) var(--sp-10); border-radius: var(--r-pill); white-space: nowrap; display: inline-flex; align-items: center; gap: var(--sp-6); }
   .pill .pdot, .pill svg { flex: none; position: relative; top: -1.5px; }
   .pill.ok { background: var(--ok-tint); color: var(--ok-ink); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ok) 22%, transparent); }
   .pill.pending { background: var(--pending-tint); color: var(--pending); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--pending) 22%, transparent); }
@@ -1003,7 +945,7 @@
      Amber + the pulsing dot, the same language the pill used. */
   .res-wipnote { display: inline-flex; align-items: center; gap: var(--sp-6); color: var(--pending); font-weight: 600; }
   .res-wipnote .pdot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
-  .res-req { font-family: var(--font-label); font-size: var(--fs-10); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: transparent; border: 1.5px solid transparent; border-radius: var(--r-ctl); padding: var(--sp-4) var(--sp-6); cursor: pointer; display: inline-flex; align-items: center; gap: var(--sp-5); white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }
+  .res-req { font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: transparent; border: 1.5px solid transparent; border-radius: var(--r-ctl); padding: var(--sp-4) var(--sp-6); cursor: pointer; display: inline-flex; align-items: center; gap: var(--sp-5); white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }
   .res-req svg { width: 19.5px; height: 19.5px; }
   .res-req:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
   .res-req:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
@@ -1021,7 +963,7 @@
   .sr:hover { border-color: var(--line-strong); background: var(--surface-2); }
   .sr:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
   @keyframes srIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-  .sr-lvl { font-family: var(--font-label); font-size: var(--fs-10); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: var(--surface-2); padding: var(--sp-4) var(--sp-8); border-radius: var(--r-pill); flex: none; min-width: 93px; text-align: center; }
+  .sr-lvl { font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: var(--surface-2); padding: var(--sp-4) var(--sp-8); border-radius: var(--r-pill); flex: none; min-width: 93px; text-align: center; }
   .ci-chev.sr-chev.live { color: var(--ok-ink); }
   .sr-main { flex: 1; min-width: 0; }
   .sr-name { display: block; font-weight: 600; font-size: var(--fs-14); }
@@ -1058,10 +1000,12 @@
   /* Copy-link hint — toast-styled, but toggled via .show (not appended) so it can persist while hovered/focused. */
   .copy-hint { animation: none; opacity: 0; transform: translateY(12px); transition: opacity .2s, transform .2s; pointer-events: none; max-width: min(90vw, 690px); text-align: left; line-height: 1.35; }
   .copy-hint.show { opacity: 1; transform: translateY(0); }
+  /* In the toast stack (F016): a hint that isn't showing takes no room, or the toasts would float above a gap. */
+  .toast-region .copy-hint:not(.show) { position: absolute; visibility: hidden; }
   .toast .tmono, .copy-hint .tmono { font-family: var(--font-mono); font-weight: 600; }
   .toast svg, .copy-hint svg { width: 24px; height: 24px; flex: none; }
   /* Actionable toast: the wrap is pointer-events:none, so re-enable clicks on the button itself. */
-  .toast-act { pointer-events: auto; margin-left: var(--sp-4); flex: none; font-family: var(--font-label); font-size: var(--fs-10); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--bg); background: transparent; border: 1.5px solid color-mix(in srgb, var(--bg) 45%, transparent); border-radius: var(--r-sm); padding: var(--sp-6) var(--sp-11); cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s; }
+  .toast-act { pointer-events: auto; margin-left: var(--sp-4); flex: none; font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--bg); background: transparent; border: 1.5px solid color-mix(in srgb, var(--bg) 45%, transparent); border-radius: var(--r-sm); padding: var(--sp-6) var(--sp-11); cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s; }
   .toast-act:hover { background: color-mix(in srgb, var(--bg) 18%, transparent); border-color: var(--bg); }
   .toast-act:focus-visible { outline: 3px solid var(--bg); outline-offset: 3px; }
   /* Error toast (F134): the WHOLE toast turns red — darker red ink on the light red fill (two reds, ≥ 4.5:1 in
@@ -1094,7 +1038,7 @@
   .share-pack, .res-req, .res-pin, .lb-copy, .lb-open, .cov-chip-act, .adm-del { min-height: 36px; }
   @media (pointer: coarse) {
     .ft-chip, .ft-seg-btn, .res-req, .res-pin, .share-pack, .lb-copy, .lb-open,
-    .cov-chip-act, .wire-move, .wire-dup, .wire-del, .adm-del { min-height: 48px; }
+    .cov-chip-act, .wire-del, .adm-del { min-height: 48px; }
     /* iOS zooms the page into any field under 24px on focus — the 21px search box and the bug form did
        exactly that (F028). Fixed px on purpose: it is Safari's threshold, not a type-scale choice. */
     .search input, #bugModal textarea, #bugModal input, #bugModal select { font-size: 24px; }
@@ -1203,7 +1147,6 @@
     /* Collapsed, the header is exactly the brand row: 18px of padding above and below it, matching the
        gap over the B in the logo. Zeroing the row-gap is what does that — cancelling each gap with a
        negative margin left ~30px of dead space under the row. */
-    body.nav-hidden .topbar-inner { row-gap: 0; }
     /* Row 2 is tabs + the two icon buttons: at the desktop padding that measured 559.5px against 541.5px of
        usable width, so the theme toggle wrapped to a row of its own. Six pixels per tab buys it back;
        the tabs keep their height, so the tap target is unchanged. */
@@ -1229,13 +1172,11 @@
     /* Auto-collapse the header chrome on scroll-down (see the scroll handler in app.js) to reclaim space;
        both slide back on scroll-up. Collapse height + fade, and pull the row up to eat the flex gap each
        one leaves. `clip` rather than `hidden` so a focus ring on the last visible row isn't shaved off. */
-    .search, .viewnav, .bug-btn, .theme-toggle { max-height: 78px; overflow: hidden; overflow: clip; overflow-clip-margin: 6px; transition: max-height .22s ease, opacity .18s ease, margin-top .22s ease; }
+    /* (The collapse itself is in the "header collapse" block at the end: it overlays, it no longer changes heights — F042.) */
     /* The whole ROW has to collapse, not just the tabs: the bug and theme buttons sit on the tab row,
        so collapsing .viewnav alone left the row at its full 57px and reclaimed nothing. And the
        negative margin must equal .topbar-inner's row-gap, or each collapsed row leaves its gap
        behind — keep those two tokens the same. Measured: 238.5px → 94.5px, i.e. down to the brand row. */
-    body.nav-hidden .search, body.nav-hidden .viewnav,
-    body.nav-hidden .bug-btn, body.nav-hidden .theme-toggle { max-height: 0; height: 0; min-height: 0; opacity: 0; margin-top: 0; padding-block: 0; border-width: 0; pointer-events: none; }
     /* The collapse changes the sticky header's height by ~150px. With scroll anchoring on, Chrome shifts scrollY
        by the same amount to keep the content still, which the scroll handler reads as a scroll the other way:
        hide → show → hide, several times a second (F012, audit 2026-10-26). Anchoring off breaks that loop. */
@@ -1330,11 +1271,11 @@
   /* PRIMARY on desktop: getting to the file in SharePoint is what a header action is FOR when the
      device cannot hand the file straight to a customer. On a device that can (see .lb-share and the
      canShare branch in app.js), Share takes primary and this link moves into the ⋯ menu instead. */
-  .lb-open { display: inline-flex; align-items: center; gap: var(--sp-6); height: 42px; font-family: var(--font-label); font-size: var(--fs-10); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: var(--surface); text-decoration: none; border: 1.5px solid var(--line-strong); border-radius: var(--r-ctl); padding: 0 var(--sp-11); white-space: nowrap; transition: color .15s, border-color .15s; }
+  .lb-open { display: inline-flex; align-items: center; gap: var(--sp-6); height: 42px; font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: var(--surface); text-decoration: none; border: 1.5px solid var(--line-strong); border-radius: var(--r-ctl); padding: 0 var(--sp-11); white-space: nowrap; transition: color .15s, border-color .15s; }
   /* An outline button like Download: Share is the one filled control in the row (F091). */
   .lb-open:hover { color: var(--ok-ink); border-color: var(--ok); }
   .lb-open svg { width: 19.5px; height: 19.5px; }
-  .lb-copy { display: inline-flex; align-items: center; height: 42px; gap: var(--sp-6); font-family: var(--font-label); font-size: var(--fs-10); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: var(--surface); cursor: pointer; border: 1.5px solid var(--line-strong); border-radius: var(--r-ctl); padding: 0 var(--sp-10); white-space: nowrap; transition: color .15s, border-color .15s; }
+  .lb-copy { display: inline-flex; align-items: center; height: 42px; gap: var(--sp-6); font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: var(--surface); cursor: pointer; border: 1.5px solid var(--line-strong); border-radius: var(--r-ctl); padding: 0 var(--sp-10); white-space: nowrap; transition: color .15s, border-color .15s; }
   .lb-copy svg { width: 19.5px; height: 19.5px; }
   .lb-copy:hover { color: var(--ink); border-color: var(--ink-faint); }
   .lb-copy:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
@@ -1557,6 +1498,9 @@
   .tour-spot { position: fixed; z-index: 9001; border-radius: 15px; box-shadow: 0 0 0 14998.5px rgba(8, 12, 20, .66); outline: 3px solid var(--ok); outline-offset: 3px; pointer-events: none; }
   /* It glides only from one step to the next; on scroll it moves with the page, no tween (F041). */
   .tour-spot.glide { transition: top .25s ease, left .25s ease, width .25s ease, height .25s ease; }
+  /* F040: the box and the tap ring glide with the frame (the box keeps its opacity fade) */
+  .tour-pop.glide { transition: top .25s ease, left .25s ease, opacity .12s ease; }
+  .tour-tap.glide { transition: top .25s ease, left .25s ease, width .25s ease, height .25s ease; }
   .tour-spot[hidden] { display: none; }
   .tour-pop { position: fixed; z-index: 9002; top: 0; left: 0; width: 510px; max-width: calc(100vw - 48px); box-sizing: border-box; background: var(--surface); color: var(--ink); border: 1.5px solid var(--line); border-radius: var(--r-lg); padding: 24px 27px 21px; box-shadow: var(--shadow-hover); max-height: calc(100dvh - 36px); overflow: auto; transition: opacity .12s ease; }
   /* The dialog tokens, like Report a problem (F072); never taller than the screen, so a landscape phone can still reach
@@ -1564,6 +1508,7 @@
   .tour-pop:focus { outline: none; }
   /* Born hidden, shown once it has content and a place (F001); faded while the page changes under a tap (F009). */
   .tour-pop[hidden] { display: none; }
+  .tour-content { display: contents; }
   .tour-pop.tour-moving { opacity: 0; pointer-events: none; }
   .tour-step { font-family: var(--font-label); font-size: var(--fs-11); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ok-ink); margin-bottom: 9px; }
   .tour-dots { display: flex; gap: 6px; margin: 0 0 15px; }
@@ -1590,8 +1535,8 @@
   /* Tap steps: a pulsing ring on the item to tap (the owner took the hint line off — the ring is the cue). */
   .tour-tap { position: fixed; z-index: 9001; border: 3px solid var(--ok); border-radius: 12px; pointer-events: none; animation: tourPulse 1.4s ease-out infinite; }
   .tour-tap[hidden] { display: none; }
-  @keyframes tourPulse { 0% { box-shadow: 0 0 0 0 rgba(6, 166, 196, .75); } 70% { box-shadow: 0 0 0 18px rgba(6, 166, 196, 0); } 100% { box-shadow: 0 0 0 0 rgba(6, 166, 196, 0); } }
-  @media (prefers-reduced-motion: reduce) { .tour-spot.glide { transition: none; } .tour-pop { transition: none; } .tour-tap { animation: none; } }
+  @keyframes tourPulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 75%, transparent); } 70% { box-shadow: 0 0 0 18px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { .tour-spot.glide, .tour-pop.glide, .tour-tap.glide { transition: none; } .tour-pop { transition: none; } .tour-tap { animation: none; } }
   body.pre-auth .bug-btn { display: none; }
   /* Header action button (right side of the "Products & resources" title row) */
   .level-head-row { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-20); flex-wrap: wrap; }
@@ -1676,7 +1621,7 @@
   .gal-thumb:hover { border-color: var(--line-strong); }
   /* ---- Select mode (T7-17): pick tiles / rows, then Download / Share / Copy act on the picks ---- */
   .gal-modebar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-6); padding-bottom: var(--sp-6); border-bottom: 1.5px solid var(--line); }
-  .gal-modebar button { font-family: var(--font-label); font-size: var(--fs-10-5); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 600; color: var(--ink-soft); background: var(--surface); border: 1.5px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-5) var(--sp-9); min-height: 36px; cursor: pointer; }
+  .gal-modebar button { font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 600; color: var(--ink-soft); background: var(--surface); border: 1.5px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-5) var(--sp-9); min-height: 36px; cursor: pointer; }
   .gal-modebar button:hover, .gal-modebar .gal-sel-toggle[aria-pressed="true"] { color: var(--ok-ink); border-color: var(--ok-ink); }
   .gal-sel-count { font-size: var(--fs-11); color: var(--ink-faint); margin-left: auto; }
   .gal-tick, .res-tick { display: none; flex: none; width: 30px; height: 30px; border-radius: 6px; border: 2.25px solid var(--ctl-line); background: var(--surface); color: transparent; place-items: center; }
@@ -1696,9 +1641,7 @@
   /* The whole nav is PM-only (F135): a rep's nav held one tab that could never switch anywhere. */
   .viewnav-pm-hidden { display: none; }
   .view-note { padding: 33px 6px; font-size: var(--fs-14); color: var(--ink-faint); }
-  .view-note.note-strong { color: var(--ink-soft); }
   .sk-row-col { flex-direction: column; }
-  .wire-open-static { cursor: default; }
   /* Windows High Contrast / forced colors (decision 12a): the system palette replaces backgrounds, borders and
      text colour and drops box-shadows, so states drawn only that way vanish. Kept to ONE block, last in the file. */
   @media (forced-colors: active) {
@@ -1713,6 +1656,11 @@
     .tour-spot, .tour-block.dim { forced-color-adjust: none; }
     .tour-spot { outline-color: Highlight; }
     .tour-tap { border-color: Highlight; }
+    /* F015/F071: the selected tab, Find's status filter, the Add-files mode and the selected product/model row are
+       drawn with fills and inset shadows only, which forced colors removes; the PM tab's alert dot is a fill too. */
+    .vtab.on, .ft-seg-btn.on, .af-seg-btn.on { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+    .col-item.sel { outline: 3px solid Highlight; outline-offset: -3px; }
+    .vtab.has-alert::after { forced-color-adjust: none; background: Mark; }
   }
 
 /* ---- Audit 2026-10-26 batch G: small-screen fixes, after every rule they override ---- */
@@ -1722,6 +1670,11 @@
 @media (max-width: 380px) {
   .vtab { padding-left: var(--sp-8); padding-right: var(--sp-8); }
   .theme-toggle { order: 1; margin-left: auto; }
+  .userchip { order: 0; } /* the name follows the logo and the theme button ends the row; both at order 1 put the theme first (F017) */
+}
+/* Phone: "1 of 10 selected" has its own line from the start. It wrapped there only once Clear appeared, and every row dropped under the thumb (F068). */
+@media (max-width: 620px) {
+  .res-sel-count { flex-basis: 100%; margin-left: 0; }
 }
 /* Phone: the two Add files choices don't fit side by side; wrapped, they left an empty half-cell (F075). Stack them. */
 @media (max-width: 480px) {
@@ -1736,6 +1689,27 @@
   .tour-pop.welcome .tour-title { font-size: var(--fs-17); margin-bottom: 9px; }
   .tour-pop.welcome .tour-lead { margin-bottom: 18px; }
   .tour-pop.welcome .tour-foot { flex-direction: row-reverse; justify-content: center; gap: var(--sp-16); }
+}
+
+/* ---- Mock round 2026-10-29, batch C: the header (after every rule it overrides) ---- */
+/* F066 (owner's pick 4a): between phone and desktop the top bar wraps, and the ?, bug and theme buttons broke up, one
+   alone on a row. They are one group, kept together at the right of whichever row they land on. */
+@media (min-width: 621px) and (max-width: 1000px) {
+  .topbar-icons { display: flex; align-items: center; gap: inherit; flex: none; margin-left: auto; }
+}
+/* F042 (decision 9a) + F066: the header collapses on scroll on phones AND on short screens (a phone on its side), and it
+   no longer changes height. The rows below the brand row fade and slide away in place, and the bar's background shrinks
+   to the brand row (--hdr-row1, measured by syncTopbarHeight), so the page under it never moves. Collapsing used to
+   change the sticky header's height by ~100 px on every change of scroll direction. */
+@media (max-width: 620px), (max-height: 500px) {
+  .search, .viewnav, .bug-btn, .theme-toggle { transition: opacity .18s ease, transform .22s ease; }
+  body.nav-hidden .search, body.nav-hidden .viewnav, body.nav-hidden .bug-btn, body.nav-hidden .theme-toggle { opacity: 0; transform: translateY(-12px); pointer-events: none; }
+  body.nav-hidden .topbar { background: transparent; border-bottom-color: transparent; pointer-events: none; }
+  body.nav-hidden .topbar::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: var(--hdr-row1, 94.5px); background: var(--surface); border-bottom: 1.5px solid var(--line); z-index: -1; }
+  body.nav-hidden .brand, body.nav-hidden .userchip { pointer-events: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .search, .viewnav, .bug-btn, .theme-toggle { transition: none; }
 }
 
 :root { --demo-scale: 1.5; font-size: 24px; }
