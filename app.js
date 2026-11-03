@@ -1403,6 +1403,9 @@
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitSearchHint, function () {});
   if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener("loadingdone", fitSearchHint); // a face that arrives later
   setTimeout(fitSearchHint, 0);
+  // The box narrows after load with no window resize (the name and the PM tabs arrive: 418 → 332 px at 1024 wide), so the
+  // hint picked for the wider box ran under the "/" key (owner, 2026-11-03). Re-fit whenever the box itself changes size.
+  if (searchInput && window.ResizeObserver) { var _hintRaf = 0; new ResizeObserver(function () { cancelAnimationFrame(_hintRaf); _hintRaf = requestAnimationFrame(fitSearchHint); }).observe(searchInput); }
   function renderColumns() {
     syncTopbarHeight();
     if (catalogError) { content.innerHTML = catalogUnavailable("Fine Goods for Dragons", "Products & Resources"); lastAnimKeys = null; syncViewTabs(); return; }
@@ -4584,6 +4587,14 @@
     var top = Math.max(r.top - pad, bar), bottom = Math.min(r.bottom + pad, top + vh - 24); // a tall area is cut at the viewport, as before
     return { top: top, height: bottom - top, away: bottom - top < 24 || top > vh - 24 };
   }
+  // Two lit areas side by side whose frames would touch (Share and Download in the preview, ~8 px apart: the frames overlapped
+  // by 12 px) are lit as ONE frame around both (owner, 2026-11-02). Areas apart, or on different rows (Request this and the
+  // intake form button), keep a frame each. Each frame sits pad px out and its outline 4 px further.
+  function tourMergeSideBySide(r, r2, pad) {
+    if (!r || !r2 || r.bottom <= r2.top || r2.bottom <= r.top) return false;
+    var gap = r.left <= r2.left ? r2.left - r.right : r.left - r2.right;
+    return gap < 2 * (pad + 4) + 4;
+  }
   function tourPlace(r, pw, ph, vw, vh) {
     var at = tourPlaceRaw(r, pw, ph, vw, vh);
     return { top: Math.max(12, Math.min(at.top, vh - ph - 12)), left: Math.max(16, Math.min(at.left, vw - pw - 16)) };
@@ -4617,6 +4628,7 @@
     // The file the tour opens, on whichever card holds it; and the preview steps' prep: open it again when the rep came back.
     function openRow() { return p.openRes ? document.querySelector((p.openShared ? ".col-product" : ".col-model") + ' .res[data-res="' + cssEsc(p.openRes) + '"]') : null; }
     function previewOpen() { if (lb && !lb.hidden) return false; var a = modelOpen(), r = openRow(); if (r) { r.click(); return true; } return a; }
+    var openLink = document.getElementById("lbOpenLink"), openInMenu = !!(openLink && openLink.closest("#lbMoreMenu"));
     // The welcome screen changes nothing on the page: the rep hasn't agreed to the tour yet (F065/F007). A step the
     // product can't show (no shared top card, no Request this row) is left out up front, so the count is true (F043).
     return [
@@ -4631,19 +4643,23 @@
         t: "Each product comes in models", p: "Pick the model you need." },
       p.hasShared ? { prep: modelOpen, el: function () { return document.querySelector(".col-product"); },
         t: "Files every model shares", p: window.PF.tourSharedSentence(p.sharedTypes) } : null,
-      // smooth: the page scrolls down to this card where the rep can see it move, instead of jumping there (owner, 2026-11-02).
+      // The page scrolls down to this card where the rep can see it move (owner, 2026-11-02); every step does since rideTo.
       // Open a file (owner, 2026-11-02): any file on the lit card opens; Next opens the set the tour picked (pictures when the
       // model has them), lit with the card even when it sits on the product card above. The preview steps follow.
-      { prep: modelOpen, smooth: true, anyFile: true, tap: openRow, el: function () { var c = document.querySelector(".col-model"), f = openRow(); return f && c && !c.contains(f) ? [f, c] : c; },
+      { prep: modelOpen, anyFile: true, tap: openRow, el: function () { var c = document.querySelector(".col-model"), f = openRow(); return f && c && !c.contains(f) ? [f, c] : c; },
         t: "Open a file", p: "This card holds the files that are only for the model you picked. Click any file to open it" + (p.openRes ? ", or Next opens “" + p.openRes + "”" : "") + "." },
-      { inPreview: true, prep: previewOpen, wait: true, el: function () { var g = document.querySelector("#lightbox .gal-strip"); return g && g.children.length > 1 ? [g].concat([].slice.call(document.querySelectorAll("#lightbox .gal-nav"))) : null; },
+      { inPreview: true, prep: previewOpen, wait: true, flip: true, el: function () { var g = document.querySelector("#lightbox .gal-strip"); return g && g.children.length > 1 ? [g].concat([].slice.call(document.querySelectorAll("#lightbox .gal-nav"))) : null; },
         t: "Flip through the files", p: "Click a file in the list, or use the arrows, to see each one in the set." },
       { inPreview: true, prep: previewOpen, el: function () { return document.getElementById("lbShareBtn"); }, el2: function () { return document.getElementById("lbDownloadBtn"); }, // two frames: Open in SharePoint sits between them
         t: "Share or download this file", p: "Share sends it inside Grumbleton or to a customer. Download saves it, or every file in the set." },
-      { inPreview: true, prep: previewOpen, el: function () { return document.getElementById("lbOpenLink"); },
+      // A phone keeps "Open in SharePoint" under ⋯ (lbMoreMenu): that step is left out up front and the ⋯ step names it, so
+      // the count stays true from step 1 (it dropped from "of 15" to "of 14" mid-tour on the owner's iPhone, 2026-11-02).
+      openInMenu ? null : { inPreview: true, prep: previewOpen, el: function () { return document.getElementById("lbOpenLink"); },
         t: "Open in SharePoint", p: "Opens the file where it lives in SharePoint, if you need the original." },
       { inPreview: true, prep: previewOpen, el: function () { return document.getElementById("lbMoreBtn"); },
-        t: "Something wrong with a file?", p: "Under ⋯, “Flag this file” tells the product team it’s outdated or wrong. Next closes the preview." },
+        t: "Something wrong with a file?", p: openInMenu
+          ? "Under ⋯, “Flag this file” tells the product team it’s outdated or wrong, and “Open in SharePoint” opens the original. Next closes the preview."
+          : "Under ⋯, “Flag this file” tells the product team it’s outdated or wrong. Next closes the preview." },
       { prep: modelOpen, el: function () { return onCard(".res-pin"); },
         t: "Save your favorites", p: "Star the models you use often. They’ll wait for you at the top of the home page." },
       // Share in two parts: tap Share, then its menu is open and both options are lit and explained (owner, 2026-10-26).
@@ -4782,7 +4798,7 @@
     }
     function placeNow() {
       if (tourState !== st) return;
-      st.moving = false; pop.hidden = false; pop.classList.remove("tour-moving");
+      st.moving = false; pop.hidden = false; if (!st.smoothing) pop.classList.remove("tour-moving"); // the box waits out the tour's own scroll (rideTo)
       var centered = !!(!st.notice && steps[st.i].welcome); // a boolean: toggle(name, undefined) would FLIP the dim on every scroll
       // Every read before the first write: one layout per call (F106).
       var pw = pop.offsetWidth, ph = pop.offsetHeight;
@@ -4802,15 +4818,19 @@
       var sr = tourSpotRect(r, pad, barBottom, innerHeight);
       // Scrolled away: dim the page evenly and keep the box where it is, rather than light the header (F027).
       if (sr.away) { spot.hidden = true; ring.hidden = true; spotMode([]); block.classList.add("dim"); return; }
+      var r2 = rectOf(st.lit2 || []), sr2 = r2 && tourSpotRect(r2, pad, barBottom, innerHeight);
+      if (sr2 && !sr2.away && tourMergeSideBySide(r, r2, pad)) { // one frame around both
+        r = { top: Math.min(r.top, r2.top), left: Math.min(r.left, r2.left), right: Math.max(r.right, r2.right), bottom: Math.max(r.bottom, r2.bottom) };
+        sr = tourSpotRect(r, pad, barBottom, innerHeight); r2 = sr2 = null;
+      }
       spot.style.setProperty("top", sr.top + "px"); spot.style.setProperty("left", (r.left - pad) + "px");
       spot.style.setProperty("width", (r.right - r.left + pad * 2) + "px");
       spot.style.setProperty("height", sr.height + "px");
-      var r2 = rectOf(st.lit2 || []), sr2 = r2 && tourSpotRect(r2, pad, barBottom, innerHeight);
       spotMode([{ top: sr.top, left: r.left - pad, width: r.right - r.left + pad * 2, height: sr.height }].concat(sr2 && !sr2.away ? [{ top: sr2.top, left: r2.left - pad, width: r2.right - r2.left + pad * 2, height: sr2.height }] : []));
       // Two lit areas: the box keeps clear of both (on a phone it covered the Download button lit under Share).
       var both2 = sr2 && !sr2.away ? { top: Math.min(r.top, r2.top), bottom: Math.max(r.bottom, r2.bottom), left: Math.min(r.left, r2.left), right: Math.max(r.right, r2.right) } : r;
       var at = tourPlace({ top: Math.max(both2.top, barBottom), bottom: both2.bottom, left: both2.left, right: both2.right }, pw, ph, innerWidth, innerHeight);
-      pop.style.setProperty("top", at.top + "px"); pop.style.setProperty("left", at.left + "px");
+      if (!st.smoothing) { pop.style.setProperty("top", at.top + "px"); pop.style.setProperty("left", at.left + "px"); } // placed once, where the page stops: re-placed every frame it flipped above and below the card
       ring.hidden = !t || tr.bottom <= barBottom || tr.top >= innerHeight;
       if (t) {
         ring.style.setProperty("top", (tr.top - 3) + "px"); ring.style.setProperty("left", (tr.left - 3) + "px");
@@ -4851,6 +4871,35 @@
       if (!st.smoothing) return; st.smoothing = false;
       try { window.scrollTo({ left: window.scrollX, top: window.scrollY, behavior: "instant" }); } catch (e) { window.scrollTo(window.scrollX, window.scrollY); }
     }
+    // One motion per step (owner's screen recording, 2026-11-02). The page used to jump in a single frame on most steps,
+    // and on the scrolling steps the box was re-placed every frame and flipped above and below the card. Now, when the
+    // area is not in view, the box fades, the page scrolls smoothly with the frame riding on its card, and the box comes
+    // back where it belongs once the page has stopped. done() runs then, or at once when nothing needs to move.
+    function rideTo(dy, my, done) {
+      var maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+      dy = Math.min(Math.max(window.scrollY + dy, 0), maxY) - window.scrollY;
+      if (Math.abs(dy) < 2) return done();
+      if (reduce || RM.matches) { window.scrollBy(0, dy); return done(); }
+      st.smoothing = true; st.glideAt = 0; setGlide(false); pop.classList.add("tour-moving");
+      window.scrollBy({ top: dy, behavior: RM.matches ? "auto" : "smooth" });
+      var t0 = performance.now(), y = window.scrollY, still = 0, moved = false;
+      (function watch() {
+        if (tourState !== st || my !== st.seq || !st.smoothing) return; // the rep moved on: stopSmooth or the next step owns the page
+        var ny = window.scrollY; if (Math.abs(ny - y) >= 0.5) { moved = true; still = 0; } else still++; y = ny;
+        var t = performance.now() - t0;
+        if (t < 1500 && (still < 6 || (!moved && t < 250))) { requestAnimationFrame(watch); return; }
+        st.smoothing = false; done();
+      })();
+    }
+    // How far the page must move to bring the lit area into view under the header: tall areas to the top, others to the
+    // middle (as scrollIntoView did), nothing when it is already in view, nothing under an open preview.
+    function stepDy(s) {
+      if (s.top) return -window.scrollY;
+      var r = rectOf(st.lit); if (!r || (lb && !lb.hidden)) return 0;
+      var bar = tourBarBottom();
+      if (r.top >= bar + 8 && r.bottom <= innerHeight - 8) return 0;
+      return r.bottom - r.top > innerHeight * 0.45 ? r.top - bar - 12 : (r.top + r.bottom) / 2 - (bar + innerHeight) / 2;
+    }
     function show(n, dir) {
       stopSmooth();
       var prev = steps[st.i]; if (prev && prev.leave && prev !== steps[n]) try { prev.leave(); } catch (e) {}
@@ -4871,19 +4920,18 @@
           return n <= N ? show(n, dir) : end();
         }
         st.lit2 = s.el2 ? els(s.el2()) : [];
-        var smooth = !!(s.smooth && !reduce);
-        if (s.top) window.scrollTo(0, 0);
-        else if (st.lit.length && !smooth) { var r = rectOf(st.lit); st.lit[0].scrollIntoView({ block: r.bottom - r.top > innerHeight * 0.45 ? "start" : "center" }); } // instant, not smooth: the box is placed right after
-        var glide = !spot.hidden; // a frame already on screen glides to its next area, the box and ring with it
-        paint(s, n); setGlide(glide); st.glideAt = glide ? performance.now() : 0; placeNow(); focusNext();
-        // A smooth step: the frame lands on what is in view first, then the page scrolls down to the card and the frame rides
-        // along with it (placeSoon on every scroll), so the rep sees where the card is (owner, 2026-11-02).
-        if (smooth && st.lit.length) after(glide ? 260 : 0, function () {
-          if (tourState !== st || my !== st.seq) return;
-          var r = rectOf(st.lit); if (!r) return;
-          st.smoothing = true;
-          st.lit[0].scrollIntoView({ behavior: RM.matches ? "auto" : "smooth", block: r.bottom - r.top > innerHeight * 0.45 ? "start" : "center" });
-        });
+        paint(s, n);
+        var dy = stepDy(s);
+        if (Math.abs(dy) < 2) { // in view: the frame glides to it, the box and ring with it
+          var glide = !spot.hidden;
+          setGlide(glide); st.glideAt = glide ? performance.now() : 0; placeNow(); focusNext();
+          // No frame on screen to glide from (after the welcome screen, after a preview closes): the box appears at its new
+          // place and fades in there, instead of leaping across the screen in one frame (owner's recording, 2026-11-02).
+          if (!glide && !reduce) { pop.classList.add("tour-hold"); requestAnimationFrame(function () { requestAnimationFrame(function () { pop.classList.remove("tour-hold"); }); }); }
+          return;
+        }
+        rideTo(dy, my, function () { placeNow(); focusNext(); });
+        if (st.smoothing) placeNow(); // the frame takes its card now and rides with it; the box waits
       });
     }
     function skipped() {
@@ -4942,16 +4990,13 @@
       var my = ++st.seq; st.phase = 1;
       var c = cur(); st.lit = els(c.el && c.el()); st.lit2 = c.el2 ? els(c.el2()) : [];
       if (!rectOf(st.lit)) return show(st.i + 1, 1); // no button on this page: on to the next step
-      paint(c, st.i); setGlide(true); st.glideAt = performance.now(); placeNow(); focusNext();
-      after(reduce ? 0 : 260, function () {
-        if (tourState !== st || my !== st.seq) return;
-        var bar = tourBarBottom(), both = rectOf(st.lit.concat(st.lit2)), one = rectOf(st.lit);
-        var fit = both && both.bottom - both.top <= innerHeight - bar - 24;
-        var dy = fit ? both.top - bar - 12 : (one.top + one.bottom) / 2 - innerHeight / 2;
-        if (Math.abs(dy) < 2) return;
-        st.smoothing = !reduce;
-        window.scrollBy({ top: dy, behavior: reduce || RM.matches ? "auto" : "smooth" });
-      });
+      paint(c, st.i);
+      var bar = tourBarBottom(), both = rectOf(st.lit.concat(st.lit2)), one = rectOf(st.lit);
+      var fit = both && both.bottom - both.top <= innerHeight - bar - 24;
+      var dy = fit ? both.top - bar - 12 : (one.top + one.bottom) / 2 - innerHeight / 2;
+      if (Math.abs(dy) < 2) { setGlide(true); st.glideAt = performance.now(); placeNow(); focusNext(); return; }
+      rideTo(dy, my, function () { placeNow(); focusNext(); }); // one motion, as in show()
+      if (st.smoothing) placeNow();
     }
     function back() { if (st.moving) return; if (st.phase) show(st.i, -1); else show(st.i - 1, -1); } // Back after the Share tap: Share, before the tap
     pop.addEventListener("click", function (e) {
@@ -4971,8 +5016,15 @@
       var t = tapTarget(), r = t && t.getBoundingClientRect();
       if (r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) doTap();
       else if (steps[st.i].anyFile && !st.notice && fileAt(e.clientX, e.clientY)) doTap(fileAt(e.clientX, e.clientY)); // owner, 2026-11-02
+      else if (steps[st.i].flip && !st.notice && galleryAt(e.clientX, e.clientY)) { galleryAt(e.clientX, e.clientY).click(); focusNext(); }
       else focusNext();
     });
+    // "Flip through the files" says to use the arrows and the list: a tap on a lit arrow or file reaches it. The tour's layer
+    // took every tap, so the arrows did nothing (owner, 2026-11-03). The keyboard's arrows stay the tour's Back and Next.
+    function galleryAt(x, y) {
+      var hit = (document.elementsFromPoint ? document.elementsFromPoint(x, y) : []).map(function (el) { return el.closest && el.closest("#lightbox .gal-nav, #lightbox .gal-thumb"); }).filter(Boolean)[0];
+      return hit && !hit.disabled && st.lit.some(function (l) { return l === hit || l.contains(hit); }) ? hit : null;
+    }
     // On "Open a file", any linked file row inside the lit area opens (not a "Request this" row: it has no preview).
     function fileAt(x, y) {
       var hit = (document.elementsFromPoint ? document.elementsFromPoint(x, y) : []).map(function (el) { return el.closest && el.closest(".res[data-res]"); }).filter(Boolean)[0];
@@ -7610,6 +7662,43 @@
     // order entirely, which would make the tabs unreachable by keyboard while scrolled down.)
     if (topbar) topbar.addEventListener("focusin", show);
   })();
+  // Pull down at the top to reload (owner, 2026-11-02). A phone browser tab does this itself; the installed Hub app (iOS
+  // and Android standalone) has no such gesture, so only there, on a touch screen. Never over a preview, a dialog or the
+  // tour, and never with unsaved edits: the browser's leave prompt does not show in the installed app.
+  (function () {
+    var mm = window.matchMedia;
+    var installed = (mm && mm("(display-mode: standalone)").matches) || window.navigator.standalone === true;
+    if (!installed || !(mm && mm("(pointer: coarse)").matches)) return;
+    var ARM = 70, el = null, startY = null, pull = 0, armed = false;
+    function atTop() { return (window.scrollY || document.documentElement.scrollTop || 0) <= 0; }
+    function blocked(target) {
+      return !!(tourState || (lb && !lb.hidden) || document.body.classList.contains("preview-open") || pmHasStagedEdits() || _pfoldSaving ||
+        (target && target.closest && target.closest(".lb, .docp, .bugm, .pfc, .wire-menu, .tour-pop, .gal-strip, input, textarea, select")));
+    }
+    function paint() {
+      if (!el) { el = document.createElement("div"); el.className = "ptr"; el.setAttribute("aria-hidden", "true"); el.innerHTML = svg('<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>') + '<span class="ptr-label"></span>'; document.body.appendChild(el); }
+      el.style.setProperty("--ptr-pull", Math.round(pull) + "px");
+      el.classList.toggle("armed", armed);
+      el.querySelector(".ptr-label").textContent = armed ? "Release to refresh" : "Pull to refresh";
+      el.hidden = pull <= 0;
+    }
+    function reset() { startY = null; pull = 0; armed = false; if (el) paint(); }
+    document.addEventListener("touchstart", function (e) {
+      startY = (e.touches.length === 1 && atTop() && !blocked(e.target)) ? e.touches[0].clientY : null;
+    }, { passive: true });
+    document.addEventListener("touchmove", function (e) {
+      if (startY == null) return;
+      var dy = e.touches[0].clientY - startY;
+      if (dy <= 0 || !atTop()) { reset(); return; }
+      pull = Math.min(dy * 0.5, 110); armed = pull >= ARM; paint(); // half the finger's travel: it feels like a spring, not a drag
+    }, { passive: true });
+    document.addEventListener("touchend", function () {
+      if (startY == null) return;
+      if (armed && !blocked(null)) { el.querySelector(".ptr-label").textContent = "Refreshing…"; el.classList.add("busy"); location.reload(); return; }
+      reset();
+    }, { passive: true });
+    document.addEventListener("touchcancel", reset, { passive: true });
+  })();
   Array.prototype.forEach.call(document.querySelectorAll(".vtab"), function (btn) {
     btn.addEventListener("click", function () {
       var v = btn.getAttribute("data-view");
@@ -7927,7 +8016,8 @@
 
   // ---- download the actual file shown in the preview (image / spec sheet / whatever it is) ----
   var DLICON = svg('<path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M5 21h14"/>');
-  var LB_CARET = '<span class="lb-caret" aria-hidden="true">▾</span>';
+  // A chevron, not the 9px ▾ glyph: on a phone the glyph was a speck the owner couldn't read as a menu (2026-11-03, the owner's pick B).
+  var LB_CARET = '<span class="lb-caret" aria-hidden="true">' + svg('<path d="m6 9 6 6 6-6"/>') + '</span>';
   var lbDownloadBtn = document.getElementById("lbDownloadBtn");
   var lbDownloadMenu = document.getElementById("lbDownloadMenu"), lbDownloadThisBtn = document.getElementById("lbDownloadThisBtn"), lbDownloadPickBtn = document.getElementById("lbDownloadPickBtn");
   // Download (N) ▾ on a multi-file preview (owner decision 4d): the visible button opens All N files / This file /

@@ -993,6 +993,14 @@
   /* Centered with left:0/right:0 + auto margins, NOT left:50% + translateX: a shrink-to-fit fixed box offset by
      50% can only use the remaining half of the viewport, so on a 390px phone every toast wrapped at ~195px
      into a tall block over the content. max-content + a viewport cap lets one-liners stay one line. (F105) */
+  /* Pull to refresh in the installed app (owner, 2026-11-02): a pill that follows the finger down from under the top edge,
+     teal once a release would reload. --ptr-pull is written by app.js through the CSSOM. */
+  .ptr { position: fixed; left: 0; right: 0; margin-inline: auto; width: max-content; top: calc(env(safe-area-inset-top, 0px) + 8px); z-index: 30; display: flex; align-items: center; gap: var(--sp-8); padding: var(--sp-8) var(--sp-14); border-radius: 999px; background: var(--surface); border: 1px solid var(--line-strong); box-shadow: var(--shadow-hover); color: var(--ink-soft); font-size: var(--fs-13); font-weight: 600; transform: translateY(calc(var(--ptr-pull, 0px) - 40px)); pointer-events: none; }
+  .ptr[hidden] { display: none; }
+  .ptr svg { width: 16px; height: 16px; flex: none; }
+  .ptr.armed { color: var(--ok-ink); border-color: var(--ok); }
+  .ptr.busy svg { animation: ptrSpin .8s linear infinite; }
+  @keyframes ptrSpin { to { transform: rotate(360deg); } }
   .toast-wrap { position: fixed; left: 0; right: 0; margin-inline: auto; width: max-content; max-width: calc(100vw - 32px); bottom: calc(26px + env(safe-area-inset-bottom, 0px)); z-index: 250; display: flex; flex-direction: column; gap: var(--sp-8); align-items: center; pointer-events: none; }
   /* The polite/assertive regions inside #toastWrap. Kept in the layout even when empty (a region that
      is display:none at insertion time is unreliably announced) — an empty one is simply zero-height. */
@@ -1127,7 +1135,9 @@
     .col-tree .col-stack > .col-product > .col-head, .col-tree .col-stack > .col-product > .col-body { padding-left: var(--sp-12); padding-right: var(--sp-10); }
     /* The opened Models/Resources are inserted directly under the whole category box (see renderColumns):
        full-width blocks between this category and the next, separate from the category's family list. */
-    .col-tree > .col { width: 100%; }
+    /* flex: 0 0 auto as for the top-level columns above: the base .col flex-basis (280px, a WIDTH on desktop) is a
+       HEIGHT in this stacked tree, and held a one-model Models column open to 280px with a blank gap under it. */
+    .col-tree > .col { width: 100%; flex: 0 0 auto; }
     /* Resource-panel header on a phone: give the model name its OWN full-width row and let the actions
        (Share to customer / Copy links / Favorite) wrap onto the next row — so a long name is never squeezed
        next to the buttons and broken mid-word ("FlexR oller"). */
@@ -1220,7 +1230,7 @@
   .signin-card .signin-lock { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); margin: 0 0 var(--sp-24); font-weight: 400; }
   .signin-card .signin-name { font-size: var(--fs-30); font-weight: 700; letter-spacing: -.01em; line-height: 1; color: var(--ink); }
   .signin-card .signin-sub { font-family: var(--font-label); font-size: var(--fs-13); font-weight: 600; letter-spacing: var(--ls-label-lg); text-transform: uppercase; color: var(--ink-soft); }
-  .signin-card p { color: var(--ink-soft); font-size: var(--fs-14-5); line-height: 1.55; margin: 0 auto var(--sp-24); max-width: 36ch; }
+  .signin-card p { color: var(--ink-soft); font-size: var(--fs-14-5); line-height: 1.55; margin: 0 auto var(--sp-24); max-width: 23em; } /* em, not ch: a ch grows with the company font's wide digits (F083 of 10-30); 23em is the width 36ch had in Inter */
   .ms-btn { display: inline-flex; align-items: center; gap: var(--sp-11); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--fs-15); font-weight: 600; padding: var(--sp-12) var(--sp-22); border-radius: var(--r-ctl); cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .08s; }
   .ms-btn:hover { border-color: var(--ok); box-shadow: 0 0 0 3px var(--ok-tint); }
   .ms-btn:active { transform: translateY(1px); }
@@ -1272,8 +1282,9 @@
   .lb-more-menu .lb-copy svg, .lb-more-menu .lb-open svg, .lb-more-menu .share-pack svg { width: 15px; height: 15px; flex: none; color: var(--ink-faint); }
   .lb-more-menu .lb-copy.copied, .lb-more-menu .share-pack.copied { color: var(--ok-ink); }
   .lb-more-menu .share-pack:disabled { opacity: .55; }
-  /* The caret that marks Share ▾ / Download (N) ▾ as menus; the label font has no ▾, so it falls back to the UI face. */
-  .lb-caret { font-family: var(--font-ui); font-size: 9px; line-height: 1; opacity: .8; margin-left: -2px; }
+  /* The caret that marks Share / Download (N) as menus: a 10px chevron (owner, 2026-11-03: the 9px ▾ glyph was too small to read). */
+  .lb-caret { display: inline-flex; flex: none; margin-left: -2px; }
+  button .lb-caret svg { width: 10px; height: 10px; stroke-width: 3.2; } /* button: beats the preview buttons' own .lb-copy svg size */
   .lb-dl[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-faint); }
   .share-pack.res-share[aria-expanded="true"] { color: var(--ok-ink); border-color: var(--ok-ink); }
   /* The model card's Share sits near the card's right edge, so its menu opens leftward like every other one (a
@@ -1529,6 +1540,7 @@
   .tour-pop[hidden] { display: none; }
   .tour-content { display: contents; }
   .tour-pop.tour-moving { opacity: 0; pointer-events: none; }
+  .tour-pop.tour-hold { opacity: 0; transition: none; } /* hidden at once at its new place, then it fades in (rideTo / show) */
   .tour-step { font-family: var(--font-label); font-size: var(--fs-11); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ok-ink); margin-bottom: 6px; }
   .tour-dots { display: flex; gap: 4px; margin: 0 0 10px; }
   .tour-dots i { width: 6px; height: 6px; border-radius: 3px; background: var(--line-strong); }
@@ -1626,7 +1638,7 @@
   .adm-empty { padding: var(--sp-40); text-align: center; color: var(--ink-faint); }
   /* Privacy utility: erase one user's favorites (departed employee / DSAR). Sits at the bottom of Admin. */
   .adm-erase { margin-top: var(--sp-34); padding-top: var(--sp-20); border-top: 1px solid var(--line); }
-  .adm-erase-help { font-size: var(--fs-13); color: var(--ink-soft); margin: var(--sp-8) 0 var(--sp-14); max-width: 62ch; }
+  .adm-erase-help { font-size: var(--fs-13); color: var(--ink-soft); margin: var(--sp-8) 0 var(--sp-14); max-width: 38em; } /* the prose cap (F083 of 10-30); 62ch ran ~96 characters a line in the company font */
   .adm-erase-row { display: flex; gap: var(--sp-10); flex-wrap: wrap; align-items: center; }
   .adm-erase-input { font-family: var(--font-ui); font-size: var(--fs-14); border: 1px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-8) var(--sp-10); background: var(--surface); color: var(--ink); flex: 1 1 260px; max-width: 360px; }
   .adm-erase-input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
