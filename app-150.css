@@ -1178,7 +1178,10 @@
        the TOP-RIGHT instead of on a row beneath the tabs. Desktop is untouched. */
     .brand { order: 0; }
     .userchip { order: 1; flex: 1 1 auto; min-width: 0; justify-content: flex-end; margin: 0; }
-    .userchip .uname { min-width: 0; }
+    /* No name on a phone (owner's pick A, 2026-11-03): in the company font the logo + name + Sign out run past a phone's
+       width, so the chip wrapped to a row of its own (header 163 → 199 px at 393 px wide). Sign out stays beside the logo.
+       Hidden, not removed: the tour's "Hi <first name>" still reads it. */
+    .userchip .uname { display: none; }
     .viewnav { order: 2; }
     .bug-btn { order: 3; margin-left: auto; }
     .theme-toggle { order: 3; }
@@ -1258,6 +1261,13 @@
      any viewport height without the bottom clipping on shorter laptops. */
   .lb { position: fixed; inset: 0; z-index: 200; display: grid; place-items: start center; grid-template-rows: minmax(0, 1fr); padding: var(--sp-24); }
   .lb-backdrop { position: absolute; inset: 0; background: rgba(8,12,20,.62); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+  /* Phones: iOS fills the status-bar strip from what sits at the top edge, so through the see-through
+     backdrop (and the 12px above the panel) the scrolled page showed, dimmed, behind the clock. A solid
+     band over that top margin, reaching up under the status bar, gives it one plain colour: the backdrop's
+     own colour over the page, so it reads as part of the dim. */
+  @media (max-width: 620px), (max-height: 500px) and (pointer: coarse) {
+    .lb::before { content: ""; position: fixed; left: 0; right: 0; top: -180px; height: calc(180px + var(--sp-8)); z-index: 1; background: rgb(8,12,20); background: color-mix(in srgb, rgb(8,12,20) 62%, var(--surface)); pointer-events: none; }
+  }
   .lb-panel { position: relative; z-index: 1; width: min(1860px, 96vw); max-height: 100%; background: var(--surface); border: 1.5px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-hover); display: flex; flex-direction: column; overflow: hidden; animation: view-in .2s ease; }
   /* wrap so the 7 header controls can't clip the ✕ on a ~620–1140px panel; anchor the right-hand action
      cluster with a stable margin-left:auto on the first action, so alignment doesn't jump left when the
