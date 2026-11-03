@@ -21,10 +21,12 @@
 .brand-mark img { width: 47.5px; height: 47.5px; display: block; }
 .signin-card .mark img, #signinMark img { width: 65px; height: 65px; display: block; }
 
-/* Demo-only: the "fictional company" strip above the app. Same amber as the app's work-in-progress fill. */
+/* Demo-only: the "fictional company" strip above the app. Same amber as the app's work-in-progress fill.
+   Above the sign-in screen (100), below every overlay: the preview (200), Manage Document (215), the bug box (210/230)
+   and toasts. At 260 it covered the preview's title and Close on a phone (F023 of 10-30). */
 .demo-banner {
   position: relative;
-  z-index: 260;
+  z-index: 150;
   background: var(--pending-fill, #f2b233);
   color: #1a1300;
   font: 600 16.25px/1.4 Inter, system-ui, sans-serif;

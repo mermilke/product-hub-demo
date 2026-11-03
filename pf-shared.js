@@ -232,7 +232,10 @@
       var G = groups[g], first = setOf(G.items[0]), models = {};
       G.items.forEach(function (it) { models[it.m] = 1; });
       var all = G.p.models.every(function (m) { return models[m]; }) && G.items.every(function (it) { return setOf(it) === first; });
-      if (!all) { Array.prototype.push.apply(out, G.items); return; }
+      // A FOLDER is never a product card: under several models it is a per-model filtered view, and the product route never
+      // holds one (splitProductDocs' rule, F050), so its Copy link reached "isn't shared by every model any more" (F013).
+      var folder = G.items.some(function (it) { return (it.arr || []).some(function (l) { return l && looksLikeFolder(l.url); }); });
+      if (!all || folder) { Array.prototype.push.apply(out, G.items); return; }
       var t = Math.max.apply(null, G.items.map(function (it) { return it.t; }));
       out.push({ k: G.items[0].k, m: G.items[0].m, rname: G.rname, arr: G.items[0].arr, t: t, product: G.p });
     });
@@ -267,27 +270,38 @@
   // The product the first-run tour walks into (owner design 2026-10-26). Best: one whose models share files (so the
   // top card shows), whose first model has a "Request this" row (a type with no links and not N/A), and whose family
   // has other products to show at the family step. Catalog order breaks ties. null when there is no product at all.
-  function pickTourPath(catalog, linksFor, isNA, skipCategory) {
-    var best = null, bestScore = -1;
+  // prefer: a model name the owner chose (2026-11-02); found, its product and that model win outright.
+  function pickTourPath(catalog, linksFor, isNA, skipCategory, prefer) {
+    var best = null, bestScore = -1, chosen = null, want = String(prefer || "").trim().toLowerCase();
     (catalog || []).forEach(function (c) {
       if (skipCategory && c.name === skipCategory) return;
       (c.families || []).forEach(function (f) {
         (f.products || []).forEach(function (p) {
-          var models = p.models || []; if (!models.length) return;
-          var m0 = models[0], split = splitProductDocs(models, linksFor);
+          var models = p.models || []; if (!models.length || chosen) return;
+          var mine = want ? models.filter(function (m) { return String(m).trim().toLowerCase() === want; })[0] : null;
+          var m0 = mine || models[0], split = splitProductDocs(models, linksFor);
           var hasShared = Object.keys(split.shared).length > 0;
           var hasRequest = RESOURCES.some(function (r) { return !(linksFor(m0, r) || []).length && !isNA(m0, r); });
           var score = (hasShared ? 4 : 0) + (hasRequest ? 2 : 0) + ((f.products || []).length > 1 ? 1 : 0);
-          if (score > bestScore) {
+          if (score > bestScore || mine) {
             bestScore = score;
             best = { cat: c.name, fam: f.name, prod: p.name, model: m0, products: f.products.map(function (x) { return x.name; }),
               modelCount: models.length, hasShared: hasShared, hasRequest: hasRequest,
               sharedTypes: RESOURCES.filter(function (r) { return !!split.shared[r]; }) }; // what the top card really holds (F046)
+            // The file the tour opens (owner, 2026-11-02): something to flip through. A set of pictures with several files (or a
+            // folder) first, then any set with several, then a picture, then the first linked file. openShared: it sits on the
+            // product card, not the model card.
+            var linked = function (r) { return (linksFor(m0, r) || []).length > 0 && !isNA(m0, r); };
+            var several = function (r) { var a = linksFor(m0, r) || []; return linked(r) && (a.length > 1 || a.some(function (l) { return looksLikeFolder(l.url); })); };
+            var pics = ["Renders", "In-Store Images"];
+            var openRes = pics.filter(several)[0] || RESOURCES.filter(several)[0] || pics.filter(linked)[0] || RESOURCES.filter(linked)[0] || null;
+            best.openRes = openRes; best.openShared = !!(openRes && split.shared[openRes]);
+            if (mine) chosen = best;
           }
         });
       });
     });
-    return best;
+    return chosen || best;
   }
   // Tour step 4's example: the types the picked product's top card really holds, at most two ("like the Product Overview",
   // "like the Flyer and the Warranty"). It said "the flyer and the warranty" whatever the card showed (F046).
@@ -390,6 +404,9 @@
     for (i = 0; i < out.length; i++) if (!MODEL_CODE_SET[out[i]]) return null;
     return out.length ? out : null;
   }
+  // The key every links / N/A / date map is read by: "<model>::<resource type>", the same in the reader, the API, the cron
+  // and the browser (F068 of 10-30). A new site builds it here; old ones move over when next edited.
+  function slotKey(model, resource) { return model + "::" + resource; }
   function modelCodes(name) {
     var m = /^(?:Hoardmaster|Gemtumbler)\s+\d+\s+((?:Mini\s+)?[A-Za-z]+)$/i.exec(String(name == null ? "" : name).trim());
     return m ? parseCodeRun(m[1]) : null;
@@ -572,6 +589,40 @@
     }
     return matched > 0;
   }
+  // A linked file's own name, for search (F079 of 10-30): the last path segment without its extension, or an Office
+  // link's file= parameter. A folder link, or a link that names no file, gives "".
+  function fileNameOf(url) {
+    var u = String(url == null ? "" : url), path = u.split("#")[0].split("?")[0], seg = path.split("/").pop() || "";
+    try { seg = decodeURIComponent(seg); } catch (e) {}
+    var EXT = /\.[a-z0-9]{2,5}$/i;
+    if (EXT.test(seg) && !/\.aspx$/i.test(seg)) return seg.replace(EXT, "");
+    var m = /[?&]file=([^&#]+)/i.exec(u);
+    if (!m) return "";
+    var f = m[1].replace(/\+/g, " ");
+    try { f = decodeURIComponent(f); } catch (e) {}
+    return f.replace(EXT, "");
+  }
+  // The words a file name is searched by: "Hoardmaster-3000_Flyer_DE" reads as "Hoardmaster 3000 Flyer DE", and keeps its hyphenated form too.
+  // Line names and numbers are left out: they say WHICH model, and that comes from the row itself. A file called "Hoardmaster and
+  // Gemtumbler Kit" under Gemtumbler 3000 X must not answer "hoardmaster 3000 x" (the wrong product's file); the file adds words like EMEA or video.
+  function fileSearchText(name) {
+    var n = String(name == null ? "" : name);
+    if (!n) return "";
+    var keep = function (s) {
+      return s.split(/\s+/).filter(function (w) {
+        return w && !w.split("-").some(function (seg) { return LINE_PREFIX[seg.toLowerCase()] || /^[0-9]+$/.test(seg); });
+      }).join(" ");
+    };
+    return (keep(n.replace(/[_.+]+/g, " ")) + " " + keep(n.replace(/[_\-.+]+/g, " "))).trim();
+  }
+  // Which linked file a search hit is about: the first whose name holds every query word the row's own name and path
+  // do not. Returns its index, or -1 when the row matched on its own (then no file is named).
+  function fileForHit(tokens, files, name, trail, codeSource) {
+    var missing = (tokens || []).filter(function (t) { return t && !FILLER[t] && !searchMatch([t], name, trail, codeSource); });
+    if (!missing.length || !files || !files.length) return -1;
+    for (var i = 0; i < files.length; i++) if (files[i] && searchMatch(missing, fileSearchText(files[i]), "", codeSource)) return i;
+    return -1;
+  }
   // Penalty for matching `query` against `haystack`, tolerating typos. Every whitespace token of the query
   // must match — either as a plain substring of the haystack (penalty 0) OR within its edit-distance
   // threshold of some haystack word. Returns the SUMMED penalty (0 = all clean substring hits, higher =
@@ -725,8 +776,15 @@
     var tset = {}; tokens.forEach(function (t) { tset[String(t).toLowerCase()] = 1; });
     return !hits.some(function (n) {
       if (n.lvl !== "Model" && !n.live) return false;
-      var model = String(n.model || n.name || "");
-      return tokenizeQuery(model).every(function (w) { return tset[w]; }) && tokens.every(function (t) { return !isCodeToken(t, tokens) || codeMatches(t, model); });
+      var model = String(n.model || n.name || ""), words = tokenizeQuery(model), have = modelCodes(model);
+      var fits = tokens.every(function (t) { return !isCodeToken(t, tokens) || codeMatches(t, model); });
+      if (!have) return fits && words.every(function (w) { return tset[w]; });
+      // A coded model is named exactly by its number and its codes: the line prefix may be left out ("400 i", "hoard 3000x"),
+      // but not swapped ("gemtumbler 3000 x" is not Hoardmaster 3000 X), and every code of the model must be typed ("400 i" is not 3000 XF) (F077).
+      var typed = {};
+      tokens.forEach(function (t) { if (isCodeToken(t, tokens) && !/^[0-9]+$/.test(t)) (parseCodeRun(t) || []).forEach(function (c) { typed[c] = 1; }); });
+      var otherLine = tokens.some(function (t) { return LINE_PREFIX[t] && words.indexOf(t) === -1; });
+      return fits && !otherLine && words.every(function (w) { return !/^[0-9]+$/.test(w) || tset[w]; }) && have.every(function (c) { return typed[c]; });
     });
   }
   function rankSearchHits(hits, tokens) {
@@ -784,7 +842,7 @@
         var was = g.before[m], now = g.after[m], wasNA = was === "N/A", nowNA = now === "N/A";
         assignments[m] = wasNA ? "N/A" : was.join(" ");
         any = true;
-        if (!nowNA) base[m] = now.slice(); // a model saved as N/A has no link base; the shrink guard still covers it
+        base[m] = nowNA ? [] : now.slice(); // N/A holds no links, and an empty base says so: a colleague's new link refuses the undo (F062)
         var lost = (nowNA ? 0 : countDistinctFiles(now)) - (wasNA ? 0 : countDistinctFiles(was));
         if (lost > 0) { byModel[m] = lost; total += lost; }
       });
@@ -1123,6 +1181,10 @@
       var url = arr[0].url, shared = deps.isShared(url);
       var ck = deps.canonUrl ? deps.canonUrl(url) : url; // dedupe folder listings across URL spellings
       var p = cache[ck] || (cache[ck] = deps.listFolder(url));
+      // Also look the folder up by id, beside the listing: that is how it reaches the Link Registry, and so how a refused
+      // listing can be told from a dead folder at night (F074). Its outcome never changes this verdict.
+      var rk = "f:" + url, look = deps.resolveOne ? (cache[rk] || (cache[rk] = deps.resolveOne(url).then(function () { return { ok: true }; }, function (e) { return { ok: false, transient: lhTransient(e) }; }))) : null;
+      if (look) p = Promise.all([p, look]).then(function (both) { return both[0]; });
       return p.then(function (files) {
         var matched = shared ? files.filter(function (fl) { return matchesModel(fl.name, it.model); }) : files;
         if (!matched.length) return { status: "empty", detail: shared ? ("shared folder has no files matching “" + it.model + "”") : "this folder is empty", url: url };
@@ -1691,7 +1753,10 @@
     current.forEach(function (u) { if (!u || isLegacyUrl(u) || (!looksLikeFolder(u) && inFolder(u))) return; var c = canonFileUrl(u); if (!seen[c]) { seen[c] = 1; final.push(u); } });
     var finalSet = {}; final.forEach(function (u) { finalSet[canonFileUrl(u)] = 1; });
     var removed = current.filter(function (u) { return u && !finalSet[canonFileUrl(u)]; }).length;
-    return { final: final, removed: removed, changed: !sameUrlSet(current, final) };
+    // removed = the links that go (the preview's number); netRemoved = how far the cell shrinks in distinct files, which is
+    // what the server's guard counts and so what the write declares (F014, as planDocumentOps does since F038).
+    var netRemoved = Math.max(0, countDistinctFiles(current.filter(Boolean)) - countDistinctFiles(final));
+    return { final: final, removed: removed, netRemoved: netRemoved, changed: !sameUrlSet(current, final) };
   }
   // ---- "Link a product folder", owner decision 3a (audit F002/F005/F096/F097/F072/F012) ----
   // Seed each planned row from the SHEET: a folder file that is already linked starts ticked where it actually sits
@@ -1779,7 +1844,7 @@
       current.forEach(function (u) { cur[canonFileUrl(u)] = 1; });
       plan.final.forEach(function (u) { fin[canonFileUrl(u)] = 1; });
       var add = plan.final.filter(function (u) { return !cur[canonFileUrl(u)]; }).length;
-      cells.push({ product: p, type: t, model: m, current: current, final: plan.final, removed: plan.removed, added: add });
+      cells.push({ product: p, type: t, model: m, current: current, final: plan.final, removed: plan.removed, netRemoved: plan.netRemoved, added: add });
       removed += plan.removed; added += add;
       current.forEach(function (u) {
         if (!u || fin[canonFileUrl(u)]) return;
@@ -1846,10 +1911,10 @@
     osaWithin: osaWithin, fuzzyThreshold: fuzzyThreshold, fuzzyPenalty: fuzzyPenalty,
     codeTokenIn: codeTokenIn, searchMatch: searchMatch, tokenizeQuery: tokenizeQuery, dayOf: dayOf, expandSearchQuery: expandSearchQuery, normAlias: normAlias, SEARCH_ALIASES: SEARCH_ALIASES,
     searchTokens: searchTokens, rankSearchHits: rankSearchHits, noExactModel: noExactModel, FILLER: FILLER, isCodeToken: isCodeToken, codeMatches: codeMatches, termIn: termIn,
-    MODEL_CODE_SET: MODEL_CODE_SET, MODEL_CODES: MODEL_CODES, DECODED_WORDS: DECODED_WORDS, parseCodeRun: parseCodeRun, modelCodes: modelCodes, resourceTypesInName: resourceTypesInName,
+    MODEL_CODE_SET: MODEL_CODE_SET, MODEL_CODES: MODEL_CODES, DECODED_WORDS: DECODED_WORDS, parseCodeRun: parseCodeRun, modelCodes: modelCodes, slotKey: slotKey, resourceTypesInName: resourceTypesInName,
     expandName: expandName, resourceFromName: resourceFromName, guessPlacement: guessPlacement, parentFolderOf: parentFolderOf,
     wiredUrlSet: wiredUrlSet, deriveWatchedFolders: deriveWatchedFolders, planFolderPlacements: planFolderPlacements,
     folderWiredSet: folderWiredSet, planPlacementWrites: planPlacementWrites, planDocumentOps: planDocumentOps, catalogSnapshotStale: catalogSnapshotStale, sameUrlSet: sameUrlSet,
-    mergeFavorites: mergeFavorites, visitStep: visitStep, planLinkUndo: planLinkUndo, collapseSharedHits: collapseSharedHits, countDistinctFiles: countDistinctFiles, shortWeek: shortWeek
+    mergeFavorites: mergeFavorites, visitStep: visitStep, planLinkUndo: planLinkUndo, collapseSharedHits: collapseSharedHits, fileNameOf: fileNameOf, fileSearchText: fileSearchText, fileForHit: fileForHit, countDistinctFiles: countDistinctFiles, shortWeek: shortWeek
   };
 });

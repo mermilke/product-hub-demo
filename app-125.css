@@ -70,6 +70,8 @@
     --sp-13: 16.25px; --sp-14: 17.5px; --sp-15: 18.75px; --sp-16: 20px; --sp-18: 22.5px; --sp-20: 25px;
     --sp-22: 27.5px; --sp-24: 30px; --sp-26: 32.5px; --sp-28: 35px; --sp-34: 42.5px; --sp-36: 45px;
     --sp-40: 50px; --sp-80: 100px; --sp-90: 112.5px;
+    /* One height for the compact uppercase controls (Select, Share, Download, Request this, the star): they sit side by side (F048 of 10-30). */
+    --ctl-compact-h: 35px;
     /* Tell the browser this document's theme so NATIVE UI matches — scrollbars (including the one inside the
        PDF document preview), form controls, etc. Without this a dark theme still shows white scrollbars. */
     color-scheme: light;
@@ -121,6 +123,7 @@
      row to the viewport's top edge, under the bar (2.4.11). --topbar-h is the measured bar height, written by
      syncTopbarHeight() in app.js on load and resize; the fallback covers the first paint. (F008) */
   html { scroll-padding-top: calc(var(--topbar-h, 90px) + 10px); }
+  #content:focus { outline: none; } /* the last-resort landing when a preview closes: no ring around the whole page (F051) */
 
   /* Header */
   /* Solid, not frosted: a backdrop-filter on a sticky header re-rasterises the blur every scroll frame over
@@ -166,7 +169,7 @@
   .level-head { margin-bottom: var(--sp-16); }
   .eyebrow { font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label); text-transform: uppercase; color: var(--ink-soft); font-weight: 600; }
   h1 { font-size: clamp(var(--fs-22), 2.2vw, var(--fs-30)); letter-spacing: -.02em; margin: var(--sp-4) 0 var(--sp-4); text-wrap: balance; font-weight: 700; }
-  .lead { color: var(--ink-soft); font-size: var(--fs-15); max-width: 72ch; margin: 0; } /* ~72 characters a line, like the PM guide (F140) */
+  .lead { color: var(--ink-soft); font-size: var(--fs-15); max-width: 38em; margin: 0; } /* about 70 characters a line in the company font, 79 in Inter (F140; measured 2026-11-02). Not ch: a ch is a digit's width, wider than average prose, and wider still in the company font (F083 of 10-30) */
 
   /* Roadmap hero */
 
@@ -185,6 +188,9 @@
   .now-model { font-family: var(--font-mono); font-size: var(--fs-13); font-weight: 600; }
   /* "New" = added since the viewer's last visit. A small inline label on the What's New card — never its
      own row, so a first/rare visitor can't get a wall of items (a brand-new visitor sees none at all). */
+  /* The What's New count opens up the strip (decision 7a): the label's own type, as a button. */
+  .now-more { font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2.5px; }
+  .now-more:hover { color: var(--ink); }
   .now-new { display: inline-block; margin-left: var(--sp-6); font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label); text-transform: uppercase; font-weight: 700; color: var(--ok-ink); background: var(--ok-tint); border-radius: var(--r-chip); padding: 1.25px var(--sp-6); vertical-align: middle; }
   .favs-head svg { width: 18.75px; height: 18.75px; vertical-align: -4.375px; margin-right: var(--sp-5); }
   .favs-head .fav-star { font-size: 20px; line-height: 1; vertical-align: -1.25px; margin-right: var(--sp-5); }
@@ -331,7 +337,7 @@
   /* The desktop reveal scrolls the stack into view; a stack taller than the viewport lines its top up with
      the viewport's top, i.e. under the sticky bar — hiding the product card's heading, the one line that
      explains the two-card split. --topbar-h is written by syncTopbarHeight() in app.js. (F094/F102) */
-  .col-stack { scroll-margin-top: calc(var(--topbar-h, 90px) + 15px); }
+  .col-stack { scroll-margin-top: 15px; } /* html scroll-padding-top already holds the bar, and the two add up (F049) */
   .col-head .col-sub { display: block; font-family: var(--font-ui); font-size: var(--fs-12); font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--ink-soft); margin-top: var(--sp-2); }
   /* The product card reads as a different thing from the model card under it (F103): its own surface and a left rule. */
   /* The left rule is the 3:1 boundary colour: in the light theme --line-strong measured 1.38:1 on the card's fill and the
@@ -539,15 +545,13 @@
   /* Badge sits at the flex-centered position (pixel-measured within ~0.625px of the title's letter middle). */
   .ftp-showall { margin-top: var(--sp-4); }
   /* "Add files" mode toggle — one segmented control swapping the three upload flows */
-  .af-seg { display: inline-flex; flex-wrap: wrap; margin: var(--sp-12) 0 var(--sp-4); border: 1.25px solid var(--line-strong); border-radius: var(--r-chip); overflow: hidden; }
-  .af-seg-btn { font: inherit; font-size: var(--fs-13); font-weight: 600; color: var(--ink-soft); background: var(--surface); border: 0; border-right: 1.25px solid var(--line); padding: var(--sp-7) var(--sp-14); cursor: pointer; transition: background .14s, color .14s; }
-  .af-seg-btn:last-child { border-right: 0; }
-  .af-seg-btn:hover { color: var(--ink); }
-  .af-seg-btn.on { background: var(--ok); color: var(--on-ok); }
+  /* Decision 12a (F030): the Add-files toggle IS the .ft-seg segment (shape, colours, active fill) at the larger size below; only its place is its own. */
+  .af-seg { flex-wrap: wrap; margin: var(--sp-12) 0 var(--sp-4); }
+  .ft-seg-lg .ft-seg-btn { font-size: var(--fs-13); font-weight: 600; padding: var(--sp-7) var(--sp-14); }
   .af-seg-btn:focus-visible { outline: 2.5px solid var(--focus-ring); outline-offset: -2.5px; }
   .af-seg-btn.on:focus-visible { outline-color: var(--on-ok); } /* focus always sits on the teal tab; in dark mode focus-ring IS teal (F046) */
   .af-body > [data-mode] .wire-lead { margin-top: var(--sp-10); }
-  .wire-lead { margin: var(--sp-6) 0 var(--sp-12); font-size: var(--fs-13); color: var(--ink-soft); max-width: 72ch; } /* F140: capped like .pmg-p */
+  .wire-lead { margin: var(--sp-6) 0 var(--sp-12); font-size: var(--fs-13); color: var(--ink-soft); max-width: 38em; } /* F140: capped like .pmg-p */
   .wire-steps { margin: 0 0 var(--sp-12); font-size: var(--fs-13); color: var(--ink); font-weight: 600; }
   /* Theme every native <select> dropdown popup to match the app (dark/light) instead of OS white. */
   select option { background-color: var(--surface); color: var(--ink); }
@@ -558,7 +562,7 @@
   .wire-help[open] summary::before { transform: rotate(90deg); }
   .wire-help summary:hover { color: var(--ink); }
   .wire-help-body { margin: var(--sp-10) 0 var(--sp-2); }
-  .wire-help-steps { margin: 0 0 var(--sp-10); padding-left: var(--sp-20); font-size: var(--fs-12-5); color: var(--ink-soft); line-height: 1.75; max-width: 60ch; }
+  .wire-help-steps { margin: 0 0 var(--sp-10); padding-left: var(--sp-20); font-size: var(--fs-12-5); color: var(--ink-soft); line-height: 1.75; max-width: 38em; }
   .wire-help-steps em { color: var(--accent-ink); font-style: normal; }
   /* PM guide (collapsible one-pager at the top of the Admin tab) */
   .pm-guide { padding: 0; }
@@ -570,11 +574,11 @@
   .pmg-body { padding: 0 var(--sp-18) var(--sp-16); }
   .pmg-body > .wire-lead { margin-top: 0; }
   .pmg-h { margin: var(--sp-16) 0 var(--sp-6); font-size: var(--fs-12-5); font-weight: 700; color: var(--ink); text-transform: uppercase; letter-spacing: .04em; }
-  .pmg-p { font-size: var(--fs-13); color: var(--ink-soft); margin: 0 0 var(--sp-6); line-height: 1.6; max-width: 72ch; }
-  .pmg-list { margin: 0; padding-left: var(--sp-20); font-size: var(--fs-13); color: var(--ink-soft); line-height: 1.7; max-width: 72ch; }
+  .pmg-p { font-size: var(--fs-13); color: var(--ink-soft); margin: 0 0 var(--sp-6); line-height: 1.6; max-width: 38em; }
+  .pmg-list { margin: 0; padding-left: var(--sp-20); font-size: var(--fs-13); color: var(--ink-soft); line-height: 1.7; max-width: 38em; }
   .pmg-list b, .pmg-steps b { color: var(--ink); }
-  .pmg-steps { color: var(--ink-soft); max-width: 72ch; }
-  .pmg-note { font-size: var(--fs-12-5); color: var(--ink-faint); margin: var(--sp-8) 0 0; line-height: 1.6; max-width: 72ch; }
+  .pmg-steps { color: var(--ink-soft); max-width: 38em; }
+  .pmg-note { font-size: var(--fs-12-5); color: var(--ink-faint); margin: var(--sp-8) 0 0; line-height: 1.6; max-width: 38em; }
   .wire-form { display: flex; gap: var(--sp-10); flex-wrap: wrap; align-items: center; }
   .wire-sel, .wire-input { font-family: var(--font-ui); font-size: var(--fs-13); border: 1.25px solid var(--ctl-line); border-radius: var(--r-ctl); padding: var(--sp-9) var(--sp-11); background: var(--bg); color: var(--ink); outline: none; }
   /* Hide the native arrow and draw our own, precisely positioned with room on both sides. */
@@ -592,6 +596,13 @@
   .wire-btn.danger:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
   /* Hover LIGHTENS the brand fill rather than reusing --ok-ink: that token is now a darkened teal chosen to
      pass AA as TEXT on a pale surface, and as a background it left the button's dark ink at 3.36:1. */
+  /* The 404 page (public/404.html, F044 of 10-30): one centred card with the way home. */
+  .nf-page { min-height: 100vh; display: grid; place-items: center; padding: var(--sp-20); box-sizing: border-box; }
+  .nf { max-width: 30em; text-align: center; }
+  .nf-code { margin: 0; font-family: var(--font-label); font-size: var(--fs-13); font-weight: 700; letter-spacing: var(--ls-label-sm); text-transform: uppercase; color: var(--accent-ink); }
+  .nf-title { margin: var(--sp-6) 0 var(--sp-10); font-size: var(--fs-22); line-height: 1.25; color: var(--ink); }
+  .nf-text { margin: 0 0 var(--sp-20); color: var(--ink-soft); }
+  .nf-home { display: inline-block; text-decoration: none; }
   .wire-btn.primary:hover { background: color-mix(in srgb, var(--ok) 78%, #ffffff); border-color: var(--ok); color: var(--on-ok); }
   .wire-btn:disabled { opacity: .6; cursor: default; }
   /* Keyboard focus rings for the modal / gallery / tab / header controls that previously had hover-only
@@ -601,7 +612,7 @@
   .bugm-close:focus-visible, .bugm-cancel:focus-visible, .bugm-submit:focus-visible,
   .cov-chip-act:focus-visible, .cov-ed-add:focus-visible,
   .fav-chip:focus-visible, .oc-doc:focus-visible, .met-jump:focus-visible, .met-alias-btn:focus-visible, .cov-lh-btn:focus-visible, .share-pack:focus-visible,
-  .gal-nav:focus-visible, .gal-thumb:focus-visible,
+  .gal-nav:focus-visible, .gal-thumb:focus-visible, .gal-modebar button:focus-visible,
   /* …and the controls that were falling back to Chrome's blue UA ring — two focus styles in one app.
      `summary` covers all ~38 disclosure triggers (Other collateral, the To-do tiles, the PM guide,
      the doc-panel families…), which had no house ring at all. */
@@ -777,7 +788,6 @@
   /* Orphan rows (loose files found in a shared folder) folded into the Sort-the-Pile list. */
   .uns-file-plain { cursor: default; font-weight: 700; }
   .uns-file-plain:hover .uns-name { text-decoration: none; }
-  .uns-orphan-tag { flex: none; display: inline-flex; align-items: center; line-height: 1; font-size: var(--fs-11); color: var(--pending); background: var(--pending-tint); border: 1.25px solid color-mix(in srgb, var(--pending-fill) 32%, var(--line)); border-radius: var(--r-chip); padding: var(--sp-4) var(--sp-6); white-space: nowrap; }
   .uns-folder-link { flex: none; font-size: var(--fs-12); color: var(--ok-ink); text-decoration: underline; text-underline-offset: 2.5px; white-space: nowrap; }
   .uns-orphan-hint { flex: 1 1 300px; font-size: var(--fs-12); color: var(--ink-soft); }
   /* The row-action remove button (the Move and Copy buttons left with the retired folder tool). */
@@ -968,6 +978,7 @@
   .sr-main { flex: 1; min-width: 0; }
   .sr-name { display: block; font-weight: 600; font-size: var(--fs-14); }
   .sr-name.mono { font-family: var(--font-mono); }
+  .sr-file { display: block; margin-top: var(--sp-2); font-size: var(--fs-12); color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* the file the query named (F079 of 10-30) */
   .sr-path { display: block; margin-top: var(--sp-3); font-size: var(--fs-12); color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sr-empty-cta { display: flex; align-items: center; gap: var(--sp-12); margin-top: var(--sp-14); flex-wrap: wrap; }
   .sr-empty-hint { font-size: var(--fs-13); color: var(--ink-faint); }
@@ -1036,6 +1047,7 @@
   /* 2.5.8 applies to every pointer, not just touch: these action pills measured 22-23px, so give them the
      30px floor outright (a 1-2px change, no layout impact). Breadcrumb links are exempt as inline text. */
   .share-pack, .res-req, .res-pin, .lb-copy, .lb-open, .cov-chip-act, .adm-del { min-height: 30px; }
+  .share-pack, .res-req, .gal-modebar button { height: var(--ctl-compact-h); } /* the star's and the preview's line box (F048 of 10-30); touch still gets 40px */
   @media (pointer: coarse) {
     .ft-chip, .ft-seg-btn, .res-req, .res-pin, .share-pack, .lb-copy, .lb-open,
     .cov-chip-act, .wire-del, .adm-del { min-height: 40px; }
@@ -1190,8 +1202,8 @@
     .now-grid { flex-direction: column; }
     /* (The phone preview-header rules — wrapping, the top-right ✕, the full-width title — live in the
        <=775px block AFTER the base .lb-* rules, further down. Same-specificity rules only win when they
-       come later in the file; sitting here they were silently overridden. So is the 2-row-header height
-       reserve for .gal / .lb-body.doc, in its own <=950px block after the default heights.) */
+       come later in the file; sitting here they were silently overridden. So are the 2-row-header reserves,
+       in their own <=950px blocks after the base rules.) */
     .cov-summary { gap: var(--sp-14); padding: var(--sp-14) var(--sp-16); }
   }
   /* --- Auth gate + sign-in screen --- */
@@ -1268,6 +1280,7 @@
      left-anchored menu ran past the card and was cut off, 2026-10-20). Where leftward would be cut instead (a
      trigger at the left of its box), lbFitMenu adds .menu-left on open. */
   .lb-more-menu.menu-left { right: auto; left: 0; }
+  .lb-more-menu.menu-up { top: auto; bottom: calc(100% + var(--sp-6)); } /* near the screen's bottom edge (F056/F039) */
   /* PRIMARY on desktop: getting to the file in SharePoint is what a header action is FOR when the
      device cannot hand the file straight to a customer. On a device that can (see .lb-share and the
      canShare branch in app.js), Share takes primary and this link moves into the ⋯ menu instead. */
@@ -1297,13 +1310,15 @@
   @media (pointer: coarse) { .lb-close, .lb-more { width: 40px; height: 40px; } }
   .lb-close:hover { color: var(--ink); border-color: var(--ink-faint); }
   .lb-body { flex: 1; min-height: 300px; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; overflow: hidden; background: var(--surface-2); padding: var(--sp-14); } /* minmax(0,1fr): an implicit auto column took the gallery's min-content width (its thumbnail strip) and grew to 755px inside a 455px phone body (F104) */
-  /* A document preview needs a DEFINITE height or it collapses: lb-body is flex:1 (basis 0%) inside a
-     panel whose height is only max-height:96vh (no definite height), so there's no free space to grow
-     into and the body falls back to its 300px min-height — leaving a portrait doc tiny with big margins.
-     Give the doc body an explicit viewport height so the pdf/frame (flex:1) fills a full-height panel.
+  /* How a document preview gets its height (F012 of 10-30). It needs a DEFINITE one or it collapses to the
+     body's 300px floor. Who sets it, by screen:
+       - 776.25px and wider, 626.25px and taller: the F070 block below gives the panel height:100% and lets this
+         body flex-fill it (it wins on specificity, :has);
+       - phones (<=775px) and landscape phones: their own dvh flex-fill rules, further down;
+       - this calc(100vh - 135px) is only the fallback for a short desktop window (776.25px+ wide, 625px or
+         less tall, fine pointer), where neither of those applies.
      flex-direction:column is required: .lb-body base carries place-items:center (align-items:center), so
-     a plain flex row would center the frame at its content height instead of filling the body. The 75px
-     reserve is the one-row header; the <=775px block bumps it for the wrapped two-row header. */
+     a plain flex row would center the frame at its content height instead of filling the body. */
   .lb-body.doc { padding: 0; display: flex; flex-direction: column; align-items: stretch; flex: none; height: calc(100vh - 135px); }
   .lb-img { max-width: 100%; max-height: calc(100vh - 157.5px); object-fit: contain; border-radius: var(--r-chip); }
   /* height:100% (not just flex:1) so the PDF fills the doc body even in browsers that don't stretch a
@@ -1330,11 +1345,9 @@
   .lb-openbtn { display: inline-block; font-weight: 600; color: var(--ok-ink); text-decoration: none; border: 1.25px solid var(--ok); border-radius: var(--r-ctl); padding: var(--sp-9) var(--sp-16); }
   .lb-openbtn:hover { background: var(--ok-tint); }
   /* --- Render gallery (multi-view) --- */
-  /* Give .gal a DEFINITE viewport height (panel 96vh minus the header + lb-body padding, ~105px) so the
-     flex chain below resolves: gal-main then flex-fills and the doc/image can be height:100% of it. The
-     old fixed `calc(96vh - 287.5px)` reserve budgeted for a worst-case 2-row thumbnail strip, so a typical
-     one-row strip wasted ~100px — leaving a portrait spec sheet cramped. Now the document takes ALL the
-     room the strip doesn't, on any screen size. */
+  /* .gal needs a DEFINITE height so the flex chain below resolves: gal-main flex-fills and the doc/image can be
+     height:100% of it, taking all the room the strip doesn't. As with .lb-body.doc above, the F070 block (776.25px+
+     wide, 626.25px+ tall) and the phone rules set it; this 100vh calc is the short-desktop-window fallback only. */
   .gal { position: relative; width: 100%; height: calc(100vh - 165px); display: flex; flex-direction: row; gap: var(--sp-12); }
   .gal-main { position: relative; flex: 1; min-width: 0; min-height: 0; display: grid; place-items: center; }
   .gal-main img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-chip); }
@@ -1342,8 +1355,7 @@
   /* Arrows live inside .gal-main so top:50% centers them on the IMAGE, not the strip below. */
   .gal-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 52.5px; height: 52.5px; border-radius: 50%; border: 1.25px solid var(--line-strong); background: color-mix(in srgb, var(--surface) 82%, transparent); -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); color: var(--ink); cursor: pointer; display: grid; place-items: center; transition: color .15s, border-color .15s; }
   .gal-nav svg { width: 25px; height: 25px; }
-  /* Definite height (not 100%): a percentage height has no definite parent here, so the iframe
-     would collapse to ~187.5px. Tie it to the viewport, minus the header + thumbnail strip chrome. */
+  /* height:100% of .gal-main, which is definite because .gal is (see above); without it the iframe collapses to ~187.5px. */
   .gal-doc { width: 100%; height: 100%; overflow: hidden; border-radius: var(--r-chip); background: #fff; }
   .gal-doc iframe { width: 100%; height: 100%; border: 0; display: block; }
   /* Office-doc embed: crop the ~60px OneDrive bar off the top of the MS viewer. PDFs use the native viewer (no crop). */
@@ -1355,14 +1367,17 @@
      extension), so it's easy to see what each document actually is. Scrolls if there are many. */
   .gal-strip { flex: none; width: 275px; display: flex; flex-direction: column; gap: var(--sp-6); overflow-y: auto; max-height: 100%; }
   /* The preview header wraps to a 2nd row (title row + buttons row) anywhere up to ~950px wide, not just on
-     phones — reserve for it there. Placed AFTER the default .gal/.lb-body.doc heights so it wins the cascade
-     (a media query adds no specificity, so source order decides); the old copy in the <=775px block above
-     sat BEFORE the defaults and was silently overridden, leaving a ~43.75px bottom clip at 621–950px. */
+     phones — reserve for it there. Placed AFTER the base rules so it wins the cascade (a media query adds no
+     specificity, so source order decides). A single image keeps its cap at every height: the F070 block does
+     not size .lb-img. The doc/gallery reserves only matter where the F070 block does not reach: a short window
+     (F012 of 10-30). */
   @media (max-width: 760px) {
-    .lb-body.doc { height: calc(100vh - 210px); }
-    .gal { height: calc(100vh - 220px); }
     /* The header wraps to two rows here, so the base 157.5px reserve let a portrait photo run past the panel (F042) */
     .lb-img { max-height: calc(100vh - 220px); }
+  }
+  @media (max-width: 760px) and (max-height: 500px) {
+    .lb-body.doc { height: calc(100vh - 210px); }
+    .gal { height: calc(100vh - 220px); }
   }
   /* Short viewports: drop the lb-body 300px floor so a short panel doesn't clip the bottom. */
   @media (max-height: 560px) { .lb-body { min-height: 0; } }
@@ -1502,6 +1517,10 @@
   .tour-pop.glide { transition: top .25s ease, left .25s ease, opacity .12s ease; }
   .tour-tap.glide { transition: top .25s ease, left .25s ease, width .25s ease, height .25s ease; }
   .tour-spot[hidden] { display: none; }
+  /* Two lit areas at once: the frames keep their outline, one layer with two holes dims the rest (it never takes clicks). */
+  .tour-spot.multi { box-shadow: none; }
+  .tour-dim { position: fixed; inset: 0; z-index: 9000; background: rgba(8, 12, 20, .66); pointer-events: none; }
+  .tour-dim[hidden] { display: none; }
   .tour-pop { position: fixed; z-index: 9002; top: 0; left: 0; width: 425px; max-width: calc(100vw - 40px); box-sizing: border-box; background: var(--surface); color: var(--ink); border: 1.25px solid var(--line); border-radius: var(--r-lg); padding: 20px 22.5px 17.5px; box-shadow: var(--shadow-hover); max-height: calc(100dvh - 30px); overflow: auto; transition: opacity .12s ease; }
   /* The dialog tokens, like Report a problem (F072); never taller than the screen, so a landscape phone can still reach
      the buttons (F066). Focus sits on the box itself for a mouse or touch user (F090): no ring for that. */
@@ -1592,14 +1611,15 @@
   .adm-meta { font-size: var(--fs-11-5); color: var(--ink-faint); overflow-wrap: anywhere; }
   .adm-meta a { color: var(--ok-ink); }
   .adm-status { margin-left: auto; }
-  .adm-status select { font-family: var(--font-ui); font-size: var(--fs-12); border: 1.25px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-5) var(--sp-8); background: var(--surface); color: var(--ink); cursor: pointer; }
+  /* Decision 12a (F031): Admin's row controls in the verbose tier Progress uses (Inter 13, 12.5px radius), not the compact uppercase chip. */
+  .adm-status select { font-family: var(--font-ui); font-size: var(--fs-13); border: 1.25px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-7) var(--sp-34) var(--sp-7) var(--sp-10); background-color: var(--surface); color: var(--ink); cursor: pointer; min-height: 40px; }
   .adm-status select:focus-visible { outline: 2.5px solid var(--focus-ring); outline-offset: 2.5px; }
   .adm-badge { font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label); text-transform: uppercase; font-weight: 700; padding: var(--sp-3) var(--sp-8); border-radius: var(--r-pill); white-space: nowrap; }
   .adm-badge.new { background: var(--ok-tint); color: var(--ok-ink); }
   .adm-badge.in_progress { background: var(--pending-tint); color: var(--pending); }
   .adm-badge.resolved { background: var(--ok-tint); color: var(--ok-ink); }
   .adm-badge.wont_fix { background: var(--surface-2); color: var(--ink-faint); }
-  .adm-del { font-family: var(--font-label); font-size: var(--fs-12); letter-spacing: var(--ls-label-lg); text-transform: uppercase; font-weight: 700; color: var(--ink-soft); background: transparent; border: 1.25px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-5) var(--sp-11); cursor: pointer; white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }
+  .adm-del { font-family: var(--font-ui); font-size: var(--fs-13); font-weight: 600; color: var(--ink-soft); background: var(--surface); border: 1.25px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-7) var(--sp-14); cursor: pointer; white-space: nowrap; min-height: 40px; }
   .adm-del:hover { color: var(--accent-ink); border-color: var(--accent); }
   .adm-del.armed { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
   .adm-del:focus-visible { outline: 2.5px solid var(--focus-ring); outline-offset: 2.5px; }
@@ -1610,7 +1630,7 @@
   .adm-erase-row { display: flex; gap: var(--sp-10); flex-wrap: wrap; align-items: center; }
   .adm-erase-input { font-family: var(--font-ui); font-size: var(--fs-14); border: 1.25px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-8) var(--sp-10); background: var(--surface); color: var(--ink); flex: 1 1 325px; max-width: 450px; }
   .adm-erase-input:focus-visible { outline: 2.5px solid var(--focus-ring); outline-offset: 1.25px; }
-  .adm-erase-btn { font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label); text-transform: uppercase; font-weight: 700; color: var(--ink-faint); background: transparent; border: 1.25px solid var(--line-strong); border-radius: var(--r-pill); padding: var(--sp-8) var(--sp-14); cursor: pointer; white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }
+  .adm-erase-btn { font-family: var(--font-ui); font-size: var(--fs-13); font-weight: 600; color: var(--ink-soft); background: var(--surface); border: 1.25px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-8) var(--sp-16); cursor: pointer; white-space: nowrap; }
   .adm-erase-btn:hover { color: var(--accent-ink); border-color: var(--accent); }
   .adm-erase-btn.armed { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
   .adm-erase-btn:focus-visible { outline: 2.5px solid var(--focus-ring); outline-offset: 2.5px; }
@@ -1623,6 +1643,12 @@
   .gal-modebar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-6); padding-bottom: var(--sp-6); border-bottom: 1.25px solid var(--line); }
   .gal-modebar button { font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label-sm); text-transform: uppercase; font-weight: 600; color: var(--ink-soft); background: var(--surface); border: 1.25px solid var(--line-strong); border-radius: var(--r-ctl); padding: var(--sp-5) var(--sp-9); min-height: 30px; cursor: pointer; }
   .gal-modebar button:hover, .gal-modebar .gal-sel-toggle[aria-pressed="true"] { color: var(--ok-ink); border-color: var(--ok-ink); }
+  .gal-modebar button:disabled { opacity: .55; cursor: default; }
+  /* A refused link's row: what, the file and how long on the left, its Fix on the right (F058). */
+  .ui-orphan.hyg-refused { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--sp-12); align-items: center; }
+  .hyg-refused > :not(.hyg-fix) { grid-column: 1; justify-self: start; }
+  .hyg-refused .hyg-open { font-size: var(--fs-13); font-weight: 600; text-align: left; }
+  .hyg-refused .hyg-fix { grid-column: 2; grid-row: 1 / span 3; width: auto; }
   .gal-sel-count { font-size: var(--fs-11); color: var(--ink-faint); margin-left: auto; }
   .gal-tick, .res-tick { display: none; flex: none; width: 25px; height: 25px; border-radius: 5px; border: 1.875px solid var(--ctl-line); background: var(--surface); color: transparent; place-items: center; }
   .gal-tick svg, .res-tick svg { width: 17.5px; height: 17.5px; }

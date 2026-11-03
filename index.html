@@ -22,12 +22,10 @@
 <link rel="stylesheet" href="/demo/demo.css" media="print, (max-width: 1599.98px)">
 <link rel="stylesheet" href="/demo/demo-125.css" media="screen and (min-width: 1600px) and (max-width: 1899.98px)">
 <link rel="stylesheet" href="/demo/demo-150.css" media="screen and (min-width: 1900px)">
-<!-- The weights that paint first (body 400, headings/buttons 600-700). Without these the fonts are only
-     discovered after the CSSOM is built, ~450 ms later on a cold load, and every page swapped visibly. -->
+<!-- The weights that paint first (body 400, headings/buttons 600-700) and the tab labels (Barlow 700/600) (T4-03, F041). -->
 <link rel="preload" href="/fonts/inter-400.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/inter-600.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/inter-700.woff2" as="font" type="font/woff2" crossorigin>
-<!-- The tab labels (Barlow 700) and the brand line (600): late, they repainted the phone header twice (F041/F112). -->
 <link rel="preload" href="/fonts/barlow-semicondensed-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/barlow-semicondensed-600.woff2" as="font" type="font/woff2" crossorigin>
 <script defer src="/pf-shared.js"></script>
