@@ -528,7 +528,8 @@
         // product/model hierarchy). Each opens in the same viewer as any other resource.
         items.forEach(function (it) {
           var b = document.createElement("button"); b.type = "button"; b.className = "oc-doc";
-          b.innerHTML = '<span class="oc-doc-ico">' + svg(ICONS[iconFor(it.resource)]) + '</span><span class="oc-doc-name">' + escapeHtml((multi ? it.model + " · " : "") + it.resource) + (it.links.length > 1 ? ' (' + it.links.length + ')' : '') + '</span><span class="oc-doc-open">' + svg(ICONS.ext) + '</span>';
+          b.innerHTML = '<span class="oc-doc-ico">' + svg(ICONS[iconFor(it.resource)]) + '</span><span class="oc-doc-name">' + escapeHtml((multi ? it.model + " · " : "") + it.resource) + (it.links.length > 1 ? ' (' + it.links.length + ')' : '') + '</span>' +
+            (it.broken ? '<span class="pill bad" title="' + escapeAttr(brokenNote()) + '">' + svg(ICONS.alert) + ' Link issue</span>' : '') + '<span class="oc-doc-open">' + svg(ICONS.ext) + '</span>';
           b.addEventListener("click", function () { openResource(it.links, it.model + " · " + it.resource, it.model); }); // the same title shape as every other caller — Copy link, usage logging and bug reports read the resource from it (F031)
           cb.appendChild(b);
         });
@@ -546,7 +547,11 @@
       (p.models || []).forEach(function (m) {
         RESOURCE_TYPES.forEach(function (r) {
           var links = linksFor(m, r.name);
-          if (links && links.length && usableLinked(m, r.name)) out.push({ model: m, resource: r.name, links: links });
+          // A resource with one broken file is kept, marked like a product row: hiding it took its good files with it,
+          // and a channel holding only that resource claimed "Not in the Hub yet" (F004 of 11-03). Empty and N/A stay out.
+          if (!links || !links.length || naFor(m, r.name)) return;
+          var hs = healthStatusFor(m, r.name);
+          if (hs !== "empty") out.push({ model: m, resource: r.name, links: links, broken: hs === "broken" });
         });
       });
     });
@@ -893,6 +898,13 @@
   var FAV_MAX = 24; // the strip's capacity; the server keeps its own, larger, per-user cap
   function favToggle(m) {
     var a = favGet(), i = a.indexOf(m), adding = i === -1;
+    // A pin to a model that was renamed or removed shows no chip and can't be removed, yet it counted toward the cap, so
+    // a rep with orphans was refused below 24 visible chips. Once the catalog is in, adding drops those pins, here and
+    // in the cross-device store (F006 of 11-03).
+    if (adding && CATALOG.length) {
+      var orphans = a.filter(function (x) { return !findModelPath(x); });
+      if (orphans.length) { a = a.filter(function (x) { return orphans.indexOf(x) === -1; }); orphans.forEach(function (x) { favMarkRemoved(x, true); favSync("remove", x); }); }
+    }
     // Refuse the 25th instead of silently dropping the oldest. The slice below used to evict it LOCALLY
     // with no matching server remove, so the evicted pin returned on the next load and a different one
     // fell off — favorites appeared to shuffle by themselves.
@@ -1033,7 +1045,7 @@
   }
   function buildResources(m, headEl, split) {
     modelSel.stop();
-    recentPush(m); // record this model as recently viewed (click, deep link, or back/forward all land here)
+    if (!tourState) recentPush(m); // record this model as recently viewed (click, deep link, or back/forward all land here); the tour's model is not the rep's (F005 of 11-03)
     var box = document.createElement("div"); box.className = "res-panel view"; box.setAttribute("data-anim", "respanel:" + sel.model);
     var pin = document.createElement("button"); pin.type = "button";
     // The star is decoration next to the label — left in the accessible name it reads as "black star
@@ -1051,7 +1063,11 @@
       // At the cap the refusal already said why; a "Removed from favorites." beside it was false (F017).
       if (favToggle(m) === null) return;
       paintPin();
+      // The strip appears (or goes) above the columns: keep the star where the finger is, instead of pushing the whole page
+      // down 64 px under it (F041 of 11-03). Instant on purpose: the page must not move.
+      var y0 = pin.getBoundingClientRect().top;
       refreshFavoritesStrip(); // reflect the add/remove in the top "Your Favorites" strip right away (no page refresh)
+      var dy = pin.getBoundingClientRect().top - y0; if (Math.abs(dy) > 1) window.scrollBy(0, dy);
       // Confirm the action. "Your Favorites" now shows at the top of every Find view, so no need to direct home.
       if (favHas(m)) showToast('<span><b>★ Added to favorites.</b></span>');
       else showToast('<span>Removed from favorites.</span>');
@@ -1130,7 +1146,9 @@
       if (selBtn) { selBtn.innerHTML = TICKICON + '<span>' + (on ? "Done" : "Select") + '</span>'; selBtn.setAttribute("aria-pressed", on ? "true" : "false"); }
       selbar.hidden = !on;
       selbar.querySelector(".res-sel-clear").hidden = !n;
-      selbar.querySelector(".res-sel-count").textContent = on ? (n + " of " + selKeys.length + " selected" + (curProductRows.length ? " (both cards)" : "")) : "";
+      // Decision 9b (F043 of 11-03): Share keeps its label, so the header never changes width when Select turns on; with
+      // nothing picked yet, the count line and Share's tooltip say what to do.
+      selbar.querySelector(".res-sel-count").textContent = on ? (n ? n + " of " + selKeys.length + " selected" + (curProductRows.length ? " (both cards)" : "") : "Pick files first: 0 of " + selKeys.length + " selected" + (curProductRows.length ? " (both cards)" : "")) : "";
       if (curProductBox) curProductBox.classList.toggle("selecting", on);
       curProductRows.forEach(function (pr) {
         var pp = on && modelSel.has(pr.key);
@@ -1149,7 +1167,7 @@
       // A running send or download stays busy, and "Files ready — send" stays until the picks change: those files are what is ready (F002).
       var selSig = on + "|" + modelSel.pick(selKeys).join(","), selChanged = selSig !== lastSelSig; lastSelSig = selSig;
       [shareCustBtn, shareMenu && shareMenu.dlBtn].forEach(function (b) { if (b && !b._pfBusy) setModelShareBusy(b, false, 0, b._pfReady && !selChanged); });
-      if (shareMenu) { shareMenu.btn.innerHTML = SHAREICON + '<span>' + escapeHtml(window.PF.selectionLabel("Share", "Share selected", modelSel)) + '</span>' + LB_CARET; shareMenu.btn.disabled = on && !n; }
+      if (shareMenu) { shareMenu.btn.innerHTML = SHAREICON + '<span>Share</span>' + LB_CARET; shareMenu.btn.disabled = on && !n; shareMenu.btn.title = on && !n ? "Pick files first" : "Share inside Grumbleton (links) or with a customer (the files)"; }
     }
     selbar.querySelector(".res-sel-all").addEventListener("click", function () { modelSel.all(selKeys); paintModelSel(); });
     selbar.querySelector(".res-sel-clear").addEventListener("click", function () { modelSel.clear(); paintModelSel(); selbar.querySelector(".res-sel-all").focus(); }); // Clear hides itself: focus to its neighbour, not <body> (F052)
@@ -1470,13 +1488,16 @@
       // With a product card in the stack, anchor to the STACK's top: landing on the model card scrolled the
       // shared Flyer/Overview/Warranty off-screen and led with a tag ("Only what differs") pointing at
       // content the rep could not see (F011). Without one, the model card is the stack's top anyway.
-      anchorCol = sel.model ? ((rc && rc.querySelector(".col-product")) ? rc : ((rc && rc.querySelector(".col-model")) || rc || mc)) : (mc || rc);
+      // On a short or sideways phone the product card plus the header fill the screen, and the model just tapped showed
+      // only a heading at the bottom: there the model card leads, with the product card one swipe up (F055 of 11-03).
+      var shortScreen = window.innerHeight < 700 || window.innerWidth > window.innerHeight;
+      anchorCol = sel.model ? ((rc && rc.querySelector(".col-product") && !shortScreen) ? rc : ((rc && rc.querySelector(".col-model")) || rc || mc)) : (mc || rc);
     }
     scopeEntranceAnim(content); // suppress re-animation of elements that were already on screen
 
     if (flashKey) {
       var fe = cols.querySelector('[data-key="' + cssEsc(flashKey) + '"]');
-      if (fe) { fe.classList.add("flash"); setTimeout(function () { fe.classList.remove("flash"); }, 1000); }
+      if (fe) { fe.classList.add("flash"); setTimeout(function () { fe.classList.remove("flash"); }, 600); }
     }
     // Restore keyboard focus to the just-activated node (the innerHTML rebuild dropped it to <body>).
     if (pendingFocusKey) {
@@ -1653,7 +1674,9 @@
       return wireResolveItem(lnk.url, bearer).then(function (f) { files.push(f); })
         .catch(function () { files.push({ name: (lnk.label || "linked file"), url: lnk.url, thumb: null, isImage: false, fileId: null }); });
     });
-    return Promise.all(jobs).then(function () { return { files: files, hasFolder: hasFolder, folderUrl: folderUrl, folderUrls: folderUrls }; });
+    // pre: the urls this read started from, the compare-and-swap base for a save merged from it (F007 of 11-03).
+    var pre = arr.map(function (l) { return l.url; });
+    return Promise.all(jobs).then(function () { return { files: files, hasFolder: hasFolder, folderUrl: folderUrl, folderUrls: folderUrls, pre: pre }; });
   }
   // Resolve a pasted SharePoint URL to its canonical driveItem webUrl + stable id, so what we STORE is
   // identity-stable no matter which "Copy link" form was pasted. NEVER blocks a save: any failure (offline
@@ -2052,6 +2075,7 @@
       if (docState === st) closeDocPanel();
     }).catch(function (err) {
       st.saving = false; docLockBody(false);
+      partialUndoToast(undoSaved, repaintProgressSafely);
       if (docState === st) approveDone();
       if (docState === st) docPaintSummary(); // the lock is off again: Approve follows the staged counts
       refreshCovStats();
@@ -2317,7 +2341,10 @@
       unsRows.forEach(function (li, i) { if (i >= 1) li.style.display = "none"; });
       var more = document.createElement("button"); more.className = "wire-btn ftp-showall"; more.type = "button";
       more.textContent = "Review all " + unsRows.length + " files";
-      more.addEventListener("click", function () { box._unsExpanded = true; unsRows.forEach(function (li) { li.style.display = ""; }); more.remove(); });
+      more.addEventListener("click", function () {
+        box._unsExpanded = true; unsRows.forEach(function (li) { li.style.display = ""; }); more.remove();
+        var nx = unsRows[1] && unsRows[1].querySelector("button, a, select, input"); if (nx) try { nx.focus({ preventScroll: true }); } catch (e) {} // the button is gone: on to the first row it revealed (F047)
+      });
       list.appendChild(more);
     }
     // Rebuilding #unsList dumped keyboard focus to <body>. If the user acted from WITHIN the pile (flag set
@@ -2378,8 +2405,10 @@
             assignments[r.model] = urls.join(" ");
             // The pre-image this list was built from. The shrink guard only COUNTS: [R1,R2] -> [R1,Y] is 2 -> 2,
             // so a render another PM added since this tab loaded was silently dropped (F003). With a base the
-            // server refuses instead.
-            base[r.model] = linksFor(r.model, resource).map(function (l) { return l.url; });
+            // server refuses instead. It is the read the list was merged from, not a second look at LINKS after the
+            // Graph resolves: a reload landing in between made the base match the new sheet while the list kept
+            // the old one, and the write went through (F007 of 11-03).
+            base[r.model] = r.ex.pre;
           });
           if (!Object.keys(assignments).length) throw new Error("couldn’t read the current links for the selected model" + (targets.length > 1 ? "s" : ""));
           return postWire(fam, prod, resource, assignments, { allowMissed: true, base: base })
@@ -2466,6 +2495,21 @@
   }
   function removeUndoToast(html, saved, repaint) {
     toastSaved(html, 15000, { label: "Undo", onClick: function () { undoLinkSave(saved, repaint); } });
+  }
+  // Did any landed write take a link away? (A record's "N/A" after counts as taking every link it had.)
+  function undoHasRemovals(saved) {
+    return saved.some(function (rec) {
+      return Object.keys(rec.before).some(function (m) {
+        var was = rec.before[m], now = Array.isArray(rec.after[m]) ? rec.after[m] : [];
+        return Array.isArray(was) && was.some(function (u) { return now.indexOf(u) < 0; });
+      });
+    });
+  }
+  // A save that failed part way: the writes that landed may have removed links, so offer their Undo as Link a product
+  // folder does (F008 of 10-30), beside the error that says what didn't save (F063 of 11-03).
+  function partialUndoToast(saved, repaint) {
+    if (!undoHasRemovals(saved)) return;
+    showToast('<span>The part that saved removed links.</span>', 15000, { label: "Undo saved part", onClick: function () { undoLinkSave(saved, repaint); } }, true, "toast-err");
   }
   // The toast and its Undo button are gone by now. Land on something in view, without moving a focus the PM has placed (F035).
   function focusAfterUndo() {
@@ -2587,7 +2631,11 @@
     var repair = moved.pure ? { swaps: swaps, stamp: moved.pure === "-" ? "" : moved.pure } : null;
     return postWire(fam, prod, resource, assignments, { base: base, expectRemoved: removed, expectRemovedByModel: byModel, repair: repair }).then(function (res) {
       mirror(Object.keys(assignments));
-      showToast('<span>Repaired — ' + (extra.length ? (extra.length + 1) + ' files now open from their new folder.' : escapeHtml(moved.name) + ' now opens from its new folder.') + '</span>');
+      // A receipt that wasn't written keeps the links right but dates the resource today: say so, and report it on the same
+      // channel as the nightly path's "repair-receipts" ⚠ (F059 of 11-03).
+      var noReceipt = !!(res && res.receipt && res.receipt.failed);
+      showToast('<span>Repaired — ' + (extra.length ? (extra.length + 1) + ' files now open from their new folder.' : escapeHtml(moved.name) + ' now opens from its new folder.') + (noReceipt ? ' Its date will read today.' : '') + '</span>');
+      if (noReceipt) reportCaught("repair receipt", "not written — " + resource + " will read Updated today");
       return res;
     }, function (err) { if (err && err.wrote) mirror(err.wrote); throw err; }); // a partial write still happened for err.wrote
   }
@@ -2653,6 +2701,7 @@
   // (confirms before deleting), Cancel discards. Optimistic on success; sheet propagates ~1 min.
   function paintCovGroupEditor(grp, g, models, N) {
     var dels = [], adds = []; // dels: {model,resource}; adds: {model,resource,url}
+    var undoCarry = []; // writes an earlier, partly failed Save landed: the final Undo covers them too (F063 of 11-03)
     var naAdd = [], naUndo = []; // naAdd: mark {model,resource} not-applicable; naUndo: un-mark an existing N/A
     // "+ Add a link" stages only after an async Graph normalize. Save read `adds` while one was still in
     // flight and closed the editor without it (F045); a Cancelled add row resurrected it. Count them, and
@@ -2712,8 +2761,8 @@
             chips += '<span class="cov-chip' + (removed ? " removed" : "") + '" data-m="' + escapeAttr(m.name) + '" data-r="' + escapeAttr(r.name) + '" data-u="' + escapeAttr(l.url) + '">' +
               '<span class="cov-chip-name cov-chip-prev" role="button" tabindex="0" title="Preview ' + escapeAttr(label) + '">' + escapeHtml(label) + '</span>' +
               '<span class="cov-chip-tag">' + escapeHtml(COV_SHORT[r.name] || r.name) + '</span>' +
-              ((!removed && !looksLikeFolder(l.url)) ? '<button class="cov-chip-act manage" type="button" title="Manage this document across products" aria-label="Manage where ' + escapeAttr(label) + ' is used">' + svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>') + '</button>' : '') +
-              (removed ? '<button class="cov-chip-act undo" type="button" aria-label="Undo removing ' + escapeAttr(label) + '">undo</button>' : '<button class="cov-chip-act del" type="button" aria-label="Remove ' + escapeAttr(label) + ' from ' + escapeAttr(r.name) + '">✕</button>') + '</span>';
+              ((!removed && !looksLikeFolder(l.url)) ? '<button class="cov-chip-act manage" type="button" title="Manage this document across products" aria-label="Manage where ' + escapeAttr(label) + ' (' + escapeAttr(m.name) + ') is used">' + svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>') + '</button>' : '') +
+              (removed ? '<button class="cov-chip-act undo" type="button" aria-label="Undo removing ' + escapeAttr(label) + ' from ' + escapeAttr(m.name) + '">undo</button>' : '<button class="cov-chip-act del" type="button" aria-label="Remove ' + escapeAttr(label === r.name ? r.name : label + ' (' + r.name + ')') + ' from ' + escapeAttr(m.name) + '">✕</button>') + '</span>';
           });
         });
         adds.filter(function (a) { return a.model === m.name; }).forEach(function (a) {
@@ -2722,7 +2771,7 @@
         // N/A chips: a resource already marked not-applicable (unless staged to undo), or newly staged N/A.
         RESOURCE_TYPES.forEach(function (r) {
           if (!((naFor(m.name, r.name) && !isNaUndo(m.name, r.name)) || isNaAdd(m.name, r.name))) return;
-          chips += '<span class="cov-chip na" data-m="' + escapeAttr(m.name) + '" data-r="' + escapeAttr(r.name) + '"><span class="cov-chip-name">' + escapeHtml(r.name) + '</span><span class="cov-chip-tag">N/A</span><button class="cov-chip-act naundo" type="button" aria-label="Not applicable — undo">undo</button></span>';
+          chips += '<span class="cov-chip na" data-m="' + escapeAttr(m.name) + '" data-r="' + escapeAttr(r.name) + '"><span class="cov-chip-name">' + escapeHtml(r.name) + '</span><span class="cov-chip-tag">N/A</span><button class="cov-chip-act naundo" type="button" aria-label="Undo not applicable: ' + escapeAttr(r.name) + ' on ' + escapeAttr(m.name) + '">undo</button></span>';
         });
         if (!chips) chips = '<span class="cov-ed-none">No links yet</span>';
         return '<div class="cov-ed-model"><div class="cov-ed-mname">' + escapeHtml(m.name) + '</div><div class="cov-ed-links">' + chips + '</div>' +
@@ -2923,13 +2972,16 @@
             .then(function () { undoSaved.push(rec); applyRes(res); done[res] = 1; });
         });
       }, Promise.resolve()).then(function () {
-        if (savedRemovals) removeUndoToast('Saved changes for ' + escapeHtml(g.prod) + '.', undoSaved, function () { if (grp.isConnected && !grp.classList.contains("has-staged")) renderCovGroup(grp, g, models, N); });
+        var allSaved = undoCarry.concat(undoSaved); undoCarry = [];
+        if (savedRemovals || undoHasRemovals(allSaved)) removeUndoToast('Saved changes for ' + escapeHtml(g.prod) + '.', allSaved, function () { if (grp.isConnected && !grp.classList.contains("has-staged")) renderCovGroup(grp, g, models, N); });
         else toastSaved('Saved changes for ' + escapeHtml(g.prod) + '.');
         renderCovGroup(grp, g, models, N);
         focusGroupEdit();
         refreshCovStats(); // keep the top summary %/bars in sync with the optimistic LINKS change
       }).catch(function (err) {
         saveDone(); edLock(false);
+        undoCarry = undoCarry.concat(undoSaved);
+        partialUndoToast(undoCarry, function () { undoCarry = []; refreshCovStats(); paint(); }); // undone: not again in the next Undo
         var landed = resKeys.filter(function (r) { return done[r]; });
         // Keep only the edits that did NOT land, so Save again re-sends exactly those.
         var keep = function (x) { return !done[x.resource]; };
@@ -3299,7 +3351,7 @@
         call(false).then(function (res) {
           showToast(svg(ICONS.sync) + '<span>Added ' + res.suggested + ' suggestion' + (res.suggested === 1 ? '' : 's') + ' to the review list below. Nothing is live until you add them.</span>');
           placementsStore.invalidate(); // the new review rows are on the server, not in the memo (F194)
-          loadFilesToPlace(box); refreshCovStats();
+          Promise.resolve(loadFilesToPlace(box)).then(function () { var b = box.querySelector(".ftp-rescan"); if (b && (!document.activeElement || document.activeElement === document.body)) b.focus(); }); refreshCovStats(); // the re-render took the button (F047)
         }).catch(function (e) { goDone(); showError('<span>Couldn’t scan (' + pmErr(e) + ').</span>', 7000); });
       });
     }).catch(function (e) { reset(); showError('<span>Couldn’t scan (' + pmErr(e) + ').</span>', 7000); });
@@ -3586,7 +3638,7 @@
       var n = normMissQuery(q); RUNTIME_HANDLED = RUNTIME_HANDLED.filter(function (x) { return x !== n; });
     }
     _demandWrite.then(function () { return apiFetch("/api/aliases", { method: "POST", body: { action: "undismiss-miss", query: q } }); })
-      .then(function () { setLocal(); reload(); })
+      .then(function (j) { if (j && j.writtenAt) noteServerWrite(j.writtenAt); setLocal(); reload(); })
       .catch(function (e) { showError('<span>Couldn’t undo — “' + escapeHtml(q) + '” stays handled. ' + pmErr(e) + '</span>', 7000); });
   }
   function demandMarkDone(q) {
@@ -3597,6 +3649,7 @@
     // this fails the PM must know it is hidden here only, or a colleague re-does the same triage tomorrow.
     if (!window.PF_getApiToken) return;
     _demandWrite = apiFetch("/api/aliases", { method: "POST", body: { action: "dismiss-miss", query: q } })
+      .then(function (j) { if (j && j.writtenAt) noteServerWrite(j.writtenAt); }) // F017: an older cached catalog can't bring it back
       .catch(function () { showError("<span>Marked handled in this browser only — couldn’t save it for the team. It will show again for others.</span>", 6000); });
   }
   // Does the EXACT search pass answer this query now (aliases included)? A closest-match row leaves To do once it does (F145).
@@ -3607,7 +3660,7 @@
     var tokens = PF.searchTokens(query);
     // Same predicate as renderSearch — if these two ever disagree, a query the search DOES answer keeps
     // being logged as a miss and shows up on the PM worklist as demand that doesn't exist.
-    return INDEX.some(function (n) { return PF.searchMatch(tokens, n.name, (n.trail || "") + " " + (n.extra || ""), n.model || n.name); });
+    return INDEX.some(function (n) { return PF.searchMatch(tokens, n.name, (n.trail || "") + " " + (n.extra || ""), n.codeModels || n.model || n.name); });
   }
   function queryStillUnmet(q) {
     var query = String(q).trim().toLowerCase();
@@ -3942,11 +3995,11 @@
       var map = {}, okN = 0, probs = [], unk = 0;
       items.forEach(function (it) {
         var s = it.result && it.result.status, key = it.model + "::" + it.resource;
-        if (s === "broken" || s === "empty") { map[key] = s; probs.push({ model: it.model, resource: it.resource, fam: it.fam, prod: it.prod, path: it.path, status: s, detail: it.result.detail, url: it.result.url }); }
+        if (s === "broken" || s === "empty") { map[key] = s; probs.push({ model: it.model, resource: it.resource, fam: it.fam, prod: it.prod, path: it.path, status: s, detail: it.result.detail, url: (it.result.badUrls && it.result.badUrls.length ? it.result.badUrls.join(" ") : it.result.url) }); } // every failing file, as the server's sync keeps them: one cleared file must not hide another (F008 of 11-03)
         // "unknown" is the classifier's honest answer for offline / throttled / a 401 — not a clean bill of
         // health. Dropping it used to save a run that hid every real red flag the server knew about
         // (F050/F053). Carry the previous verdict forward instead.
-        else if (s === "unknown") { unk++; var prev = healthStatusFor(it.model, it.resource); if (prev) { map[key] = prev; probs.push({ model: it.model, resource: it.resource, fam: it.fam, prod: it.prod, path: it.path, status: prev, detail: "not checked this run — previous result kept", url: null }); } }
+        else if (s === "unknown") { unk++; var prev = healthStatusFor(it.model, it.resource); if (prev) { map[key] = prev; probs.push({ model: it.model, resource: it.resource, fam: it.fam, prod: it.prod, path: it.path, status: prev, detail: "not checked this run — previous result kept", url: healthBadUrlFor(key) }); } }
         else okN++;
       });
       if (unk && unk / items.length > 0.3) {
@@ -4040,7 +4093,7 @@
       '<button class="met-alias-save" type="button">Save</button>' +
       '<button class="met-alias-cancel" type="button">Cancel</button></span>';
     var sel = li.querySelector(".met-alias-sel"); try { sel.focus(); } catch (e) {}
-    li.querySelector(".met-alias-cancel").addEventListener("click", function () { renderDemandRow(li, m, searchBox, onCount); });
+    li.querySelector(".met-alias-cancel").addEventListener("click", function () { renderDemandRow(li, m, searchBox, onCount); var b = li.querySelector(".wl-alias"); if (b) b.focus(); }); // F047
     li.querySelector(".met-alias-save").addEventListener("click", function () {
       if (!sel.value) { sel.focus(); sel.classList.add("met-alias-bad"); sel.setAttribute("aria-invalid", "true"); return; }
       saveAlias(li, m.query, sel.value, function () {
@@ -4128,12 +4181,22 @@
     if (!window.PF_getToken) { result.innerHTML = '<div class="wire-msg err">Please sign in again.</div>'; return; }
     result.innerHTML = '<div class="wire-msg">Opening the folder…</div>';
     var pvDone = busyButton(pvBtn, "Opening…");
-    window.PF_getToken().then(function (token) { return fetchFolderChildren(url, "Bearer " + token); }).then(function (files) {
+    // SharePoint's own "Copy link" (the one the help asks for) is a short link with no path: its last segment is an
+    // opaque id. The folder's real name and address come from Graph, once, so the label, the product pre-pick and the
+    // "no longer in this folder" sweep work from it (F009 of 11-03). A failed lookup keeps the pasted link.
+    var folder = { name: "", webUrl: "" };
+    window.PF_getToken().then(function (token) {
+      var bearer = "Bearer " + token;
+      var named = graphJson("https://graph.microsoft.com/v1.0/shares/" + shareId(url) + "/driveItem?$select=name,webUrl", bearer)
+        .then(function (it) { folder.name = (it && it.name) || ""; folder.webUrl = (it && it.webUrl) || ""; }, function () {});
+      return Promise.all([fetchFolderChildren(url, bearer), named]).then(function (r) { return r[0]; });
+    }).then(function (files) {
       var subs = files.folders || [];
+      if (folder.webUrl) url = folder.webUrl;
+      var label = folder.name || pfoldFolderLabel(url);
       if (!files.length && !subs.length) { result.innerHTML = '<div class="wire-msg">That folder has no files.</div>'; return; }
-      if (!files.length) { result.innerHTML = pfoldSubsHtml(pfoldFolderLabel(url), subs, false); pfoldWireSubs(box, result); return; }
+      if (!files.length) { result.innerHTML = pfoldSubsHtml(label, subs, false); pfoldWireSubs(box, result); return; }
       var products = pfoldProducts();
-      var label = pfoldFolderLabel(url);
       var picked = window.PF.productsForFolder(label, products).map(function (p) { return p.name; });
       var st = { url: url, label: label, files: files, folders: subs, products: products, picked: picked, rows: null };
       box._pfold = st;
@@ -4315,8 +4378,10 @@
         // nothing and show the new plan instead.
         var rows = pfoldBuildRows(st, pickedProducts, pfoldModelsOf(pickedProducts), st.rows);
         var plan = window.PF.planFolderApproval(pickedProducts, RESOURCE_TYPES.map(function (r) { return r.name; }), rows, pfoldCurrentOf, { folderUrl: st.url, folderFiles: st.files.map(function (f) { return f.url; }) });
-        var confirmed = {}; dry.removedList.forEach(function (x) { confirmed[window.PF.canonFileUrl(x.url)] = 1; });
-        var grew = plan.removedList.filter(function (x) { return !confirmed[window.PF.canonFileUrl(x.url)]; });
+        // By placement, not by file: a colleague's new placement of a file already in the list was removed silently, as the
+        // file itself was already confirmed (F068 of 11-03). Each file + "Model · Type" the PM saw counts once.
+        var confirmed = {}; dry.removedList.forEach(function (x) { var c = window.PF.canonFileUrl(x.url); (x.where || [""]).forEach(function (w) { confirmed[c + "|" + w] = 1; }); });
+        var grew = plan.removedList.filter(function (x) { var c = window.PF.canonFileUrl(x.url); return (x.where || [""]).some(function (w) { return !confirmed[c + "|" + w]; }); });
         st.rows = rows;
         if (grew.length) {
           pfoldLock(box, false); pfoldRender(box);
@@ -4587,13 +4652,30 @@
     var top = Math.max(r.top - pad, bar), bottom = Math.min(r.bottom + pad, top + vh - 24); // a tall area is cut at the viewport, as before
     return { top: top, height: bottom - top, away: bottom - top < 24 || top > vh - 24 };
   }
-  // Two lit areas side by side whose frames would touch (Share and Download in the preview, ~8 px apart: the frames overlapped
-  // by 12 px) are lit as ONE frame around both (owner, 2026-11-02). Areas apart, or on different rows (Request this and the
-  // intake form button), keep a frame each. Each frame sits pad px out and its outline 4 px further.
+  // Two lit areas whose frames would touch (Share and Download in the preview, ~8 px apart: the frames overlapped by 12 px)
+  // are lit as ONE frame around both (owner, 2026-11-02), side by side or stacked (a phone wraps Download under Share; the
+  // crossed frames were F002/F035, owner's pick 10b). Areas well apart (Request this and the intake form button) keep a frame
+  // each. Each frame sits pad px out and its outline 4 px further.
   function tourMergeSideBySide(r, r2, pad) {
-    if (!r || !r2 || r.bottom <= r2.top || r2.bottom <= r.top) return false;
-    var gap = r.left <= r2.left ? r2.left - r.right : r.left - r2.right;
-    return gap < 2 * (pad + 4) + 4;
+    if (!r || !r2) return false;
+    var touch = 2 * (pad + 4) + 4;
+    var gapX = Math.max(r2.left - r.right, r.left - r2.right), gapY = Math.max(r2.top - r.bottom, r.top - r2.bottom);
+    return gapX < touch && gapY < touch;
+  }
+  // The merged frame grows over any control it would cut in half: stacked on a phone, the box around Share and Download
+  // covered half of Open in SharePoint beside Share, so it frames the whole button group instead (owner's pick A, 2026-11-03).
+  function tourGrowOver(r, rects) {
+    r = { top: r.top, left: r.left, right: r.right, bottom: r.bottom };
+    for (var grew = true; grew;) {
+      grew = false;
+      rects.forEach(function (q) {
+        var cuts = q.left < r.right && q.right > r.left && q.top < r.bottom && q.bottom > r.top;
+        if (cuts && (q.left < r.left || q.right > r.right || q.top < r.top || q.bottom > r.bottom)) {
+          r = { top: Math.min(r.top, q.top), left: Math.min(r.left, q.left), right: Math.max(r.right, q.right), bottom: Math.max(r.bottom, q.bottom) }; grew = true;
+        }
+      });
+    }
+    return r;
   }
   function tourPlace(r, pw, ph, vw, vh) {
     var at = tourPlaceRaw(r, pw, ph, vw, vh);
@@ -4647,9 +4729,20 @@
       // Open a file (owner, 2026-11-02): any file on the lit card opens; Next opens the set the tour picked (pictures when the
       // model has them), lit with the card even when it sits on the product card above. The preview steps follow.
       { prep: modelOpen, anyFile: true, tap: openRow, el: function () { var c = document.querySelector(".col-model"), f = openRow(); return f && c && !c.contains(f) ? [f, c] : c; },
-        t: "Open a file", p: "This card holds the files that are only for the model you picked. Click any file to open it" + (p.openRes ? ", or Next opens “" + p.openRes + "”" : "") + "." },
-      { inPreview: true, prep: previewOpen, wait: true, flip: true, el: function () { var g = document.querySelector("#lightbox .gal-strip"); return g && g.children.length > 1 ? [g].concat([].slice.call(document.querySelectorAll("#lightbox .gal-nav"))) : null; },
-        t: "Flip through the files", p: "Click a file in the list, or use the arrows, to see each one in the set." },
+        // The file the tour opens can sit on the product card above: then the sentence names both cards, as the ring does (F037).
+        t: "Open a file", p: (p.openShared ? "Both cards hold files you can open: the top one for the whole product, this one only for your model. Click any file" : "This card holds the files that are only for the model you picked. Click any file to open it") + (p.openRes ? ", or Next opens “" + p.openRes + "”" : "") + "." },
+      // A rep who opened a single file on "Open a file" keeps this step and the count (decision 8c, F001/F010/F012): the
+      // preview is lit and the sentence says sets flip. It waits only while a set is still listing (the first loader).
+      { inPreview: true, prep: previewOpen, wait: true, flip: true, el: function () {
+          var g = document.querySelector("#lightbox .gal-strip");
+          this.one = !(g && g.children.length > 1);
+          // The list, and the next arrow as a second frame: the list with both arrows was one rect the width of the viewer,
+          // which lit everything and docked the box over the list it names (F036 of 11-03).
+          if (!this.one) return g;
+          return lb && !lb.hidden && !lb.querySelector(".lb-body > .lb-loading-init") ? lb.querySelector(".lb-body") : null;
+        },
+        el2: function () { return this.one ? null : document.querySelector("#lightbox .gal-next"); },
+        t: "Flip through the files", get p() { return this.one ? "This one is a single file. A set opens with a list you can flip through, or use the arrows." : "Click a file in the list, or use the arrows, to see each one in the set."; } },
       { inPreview: true, prep: previewOpen, el: function () { return document.getElementById("lbShareBtn"); }, el2: function () { return document.getElementById("lbDownloadBtn"); }, // two frames: Open in SharePoint sits between them
         t: "Share or download this file", p: "Share sends it inside Grumbleton or to a customer. Download saves it, or every file in the set." },
       // A phone keeps "Open in SharePoint" under ⋯ (lbMoreMenu): that step is left out up front and the ⋯ step names it, so
@@ -4792,7 +4885,9 @@
     }
     // A resize (a phone rotating, the iOS toolbar) can reflow the lit area off-screen: scroll it back, as the step did.
     function onResize() {
-      var r = !st.notice && !st.moving && rectOf(st.lit);
+      // Not during rideTo's smooth scroll: an iPhone Safari tab collapses its toolbar mid-scroll (a resize), and the instant
+      // scrollIntoView here cut the glide into a jump; rideTo places the area itself when it lands (F011 of 11-03).
+      var r = !st.notice && !st.moving && !st.smoothing && rectOf(st.lit);
       if (r && (r.bottom < 0 || r.top > innerHeight)) st.lit[0].scrollIntoView({ block: r.bottom - r.top > innerHeight * 0.45 ? "start" : "center" });
       placeSoon();
     }
@@ -4821,6 +4916,12 @@
       var r2 = rectOf(st.lit2 || []), sr2 = r2 && tourSpotRect(r2, pad, barBottom, innerHeight);
       if (sr2 && !sr2.away && tourMergeSideBySide(r, r2, pad)) { // one frame around both
         r = { top: Math.min(r.top, r2.top), left: Math.min(r.left, r2.left), right: Math.max(r.right, r2.right), bottom: Math.max(r.bottom, r2.bottom) };
+        var row = st.lit[0] && st.lit2[0] && st.lit[0].parentElement; // the row that holds both (Share's wrap sits in it)
+        while (row && !row.contains(st.lit2[0])) row = row.parentElement;
+        if (row && row !== document.body) {
+          r = tourGrowOver(r, Array.prototype.map.call(row.querySelectorAll("button, a"), function (e) { return e.getBoundingClientRect(); })
+            .filter(function (q) { return q.width && q.height; }));
+        }
         sr = tourSpotRect(r, pad, barBottom, innerHeight); r2 = sr2 = null;
       }
       spot.style.setProperty("top", sr.top + "px"); spot.style.setProperty("left", (r.left - pad) + "px");
@@ -4828,7 +4929,7 @@
       spot.style.setProperty("height", sr.height + "px");
       spotMode([{ top: sr.top, left: r.left - pad, width: r.right - r.left + pad * 2, height: sr.height }].concat(sr2 && !sr2.away ? [{ top: sr2.top, left: r2.left - pad, width: r2.right - r2.left + pad * 2, height: sr2.height }] : []));
       // Two lit areas: the box keeps clear of both (on a phone it covered the Download button lit under Share).
-      var both2 = sr2 && !sr2.away ? { top: Math.min(r.top, r2.top), bottom: Math.max(r.bottom, r2.bottom), left: Math.min(r.left, r2.left), right: Math.max(r.right, r2.right) } : r;
+      var both2 = sr2 && !sr2.away && !(steps[st.i] && steps[st.i].flip) ? { top: Math.min(r.top, r2.top), bottom: Math.max(r.bottom, r2.bottom), left: Math.min(r.left, r2.left), right: Math.max(r.right, r2.right) } : r; // the Flip step's box goes beside the list (F036)
       var at = tourPlace({ top: Math.max(both2.top, barBottom), bottom: both2.bottom, left: both2.left, right: both2.right }, pw, ph, innerWidth, innerHeight);
       if (!st.smoothing) { pop.style.setProperty("top", at.top + "px"); pop.style.setProperty("left", at.left + "px"); } // placed once, where the page stops: re-placed every frame it flipped above and below the card
       ring.hidden = !t || tr.bottom <= barBottom || tr.top >= innerHeight;
@@ -4905,7 +5006,7 @@
       var prev = steps[st.i]; if (prev && prev.leave && prev !== steps[n]) try { prev.leave(); } catch (e) {}
       var my = ++st.seq, s = steps[n]; st.i = n; st.phase = 0; st.notice = false; ring.hidden = true;
       var changed = false;
-      if (!s.inPreview && lb && !lb.hidden) { lbDismiss(); changed = true; } // the preview steps are over: close the file the tour opened
+      if (!s.inPreview && lb && !lb.hidden) { st.selfClose = Date.now(); lbDismiss(); changed = true; } // the preview steps are over: close the file the tour opened
       if (s.prep) try { changed = !!s.prep() || changed; } catch (e) { console.error("[pf] tour step", e); reportCaught("tour step " + n, e); }
       if (changed) moving();
       // A step on the same page (the welcome screen included) is painted at once; a changed page settles first.
@@ -4914,6 +5015,8 @@
         st.lit = s.welcome ? [] : els(s.el && s.el());
         // A set of files lists itself once SharePoint answers: give it up to 2.5 s before the step is left out.
         if (s.wait && !rectOf(st.lit) && (Date.now() - (t0 || (t0 = Date.now()))) < 2500) { setTimeout(function () { waited(t0); }, 150); return; }
+        // A set still listing after 2.5 s: the step stays, lit on the preview, with the single-file sentence (decision 8c).
+        if (s.flip && !rectOf(st.lit) && lb && !lb.hidden) { s.one = true; st.lit = els(lb.querySelector(".lb-body")); }
         if (!s.welcome && !rectOf(st.lit)) { // the area isn't on the page (a model with no Share button, say)
           steps.splice(n, 1); N = steps.length - 1; // out of the list, so the step numbers stay true (F043)
           if (dir < 0) return n - 1 >= 1 ? show(n - 1, dir) : show(0, 1);
@@ -4925,6 +5028,9 @@
         if (Math.abs(dy) < 2) { // in view: the frame glides to it, the box and ring with it
           var glide = !spot.hidden;
           setGlide(glide); st.glideAt = glide ? performance.now() : 0; placeNow(); focusNext();
+          // The preview the step opened focuses its Close button a tick later (a11yModal.open). Under reduced motion there is
+          // no settle wait, so that landed after focusNext and the next Enter did nothing (F038): take focus back once.
+          if (s.inPreview) setTimeout(function () { if (tourState === st && my === st.seq && !pop.contains(document.activeElement) && document.activeElement !== pop) focusNext(); }, 0);
           // No frame on screen to glide from (after the welcome screen, after a preview closes): the box appears at its new
           // place and fades in there, instead of leaping across the screen in one frame (owner's recording, 2026-11-02).
           if (!glide && !reduce) { pop.classList.add("tour-hold"); requestAnimationFrame(function () { requestAnimationFrame(function () { pop.classList.remove("tour-hold"); }); }); }
@@ -4980,6 +5086,11 @@
         return;
       }
       if (st.notice || steps[st.i].welcome) return;
+      // "Flip through the files … or use the arrows": on that step ← and → flip the set, as they do in the preview; Enter
+      // and the buttons move the tour (F057). A single file has nothing to flip, so they stay Back and Next.
+      if (steps[st.i].flip && !steps[st.i].one && galNav && /^Arrow(Left|Right)$/.test(e.key)) {
+        e.preventDefault(); if (e.key === "ArrowLeft") galNav.prev(); else galNav.next(); placeSoon(); return;
+      }
       if (e.key === "ArrowRight") { e.preventDefault(); next(); }
       else if (e.key === "ArrowLeft" && (st.i > 1 || st.phase)) { e.preventDefault(); back(); }
     }
@@ -5023,7 +5134,7 @@
     // took every tap, so the arrows did nothing (owner, 2026-11-03). The keyboard's arrows stay the tour's Back and Next.
     function galleryAt(x, y) {
       var hit = (document.elementsFromPoint ? document.elementsFromPoint(x, y) : []).map(function (el) { return el.closest && el.closest("#lightbox .gal-nav, #lightbox .gal-thumb"); }).filter(Boolean)[0];
-      return hit && !hit.disabled && st.lit.some(function (l) { return l === hit || l.contains(hit); }) ? hit : null;
+      return hit && !hit.disabled && (st.lit.concat(st.lit2 || []).some(function (l) { return l === hit || l.contains(hit); }) || hit.classList.contains("gal-prev")) ? hit : null; // the back arrow works too, unlit
     }
     // On "Open a file", any linked file row inside the lit area opens (not a "Request this" row: it has no preview).
     function fileAt(x, y) {
@@ -5035,7 +5146,17 @@
     // went; otherwise the step is shown again, and its prep re-opens the family, product or model it needs.
     function onHash() {
       if (tourState !== st) return;
+      // The tour's own close of its file (Back to history's model entry) is not the rep's: the step already moved on, so
+      // showing it again re-ran its prep for nothing. A close more than 2 s old is not this one.
+      var self = st.selfClose && Date.now() - st.selfClose < 2000; st.selfClose = 0;
+      if (self && !(lb && !lb.hidden)) return;
       if (lb && !lb.hidden) { end(true); showToast('<span>Tour stopped — you can take it any time from the <b>?</b> button.</span>'); return; }
+      // Back (or the phone's back gesture) on a preview step closed the file: the rep wanted out of it, so the tour steps
+      // back to "Open a file" instead of opening the file again under them (F039).
+      if (!st.notice && steps[st.i] && steps[st.i].inPreview) {
+        var k = st.i; while (k > 1 && steps[k].inPreview) k--;
+        return show(k, -1);
+      }
       if (st.notice) placeNow(); else show(st.i, 1);
     }
     // Back left the tour's entry (F083): the rep is on their own page again — end there (a ? replay restores its view).
@@ -5068,7 +5189,7 @@
         '<ul class="pmg-list">' +
           '<li><b>Find</b> — what everyone sees: browse to a product and open its files.</li>' +
           '<li><b>Progress</b> — PMs only: see which resources are linked and which still need work, and add or remove links.</li>' +
-          '<li><b>Metrics</b> — PMs only: how staff use the catalog — adoption, searches that found nothing, linked resources no one opens, and <b>Sharing &amp; errors</b> — files sent to customers plus anything that failed in a browser (sends, downloads, page errors, sign-ins); anonymous: what happened, never who. Charts are aggregate; the usage log behind them drops each person’s identity after ~60 days.</li>' +
+          '<li><b>Metrics</b> — PMs only: how staff use the catalog — adoption, searches that found nothing, linked resources no one opens, and <b>Sharing &amp; errors</b> — files sent to customers plus anything that failed in a browser (sends, downloads, page errors, sign-ins); anonymous: what happened, never who. Charts are aggregate; behind them, opens and sign-ins are stored under a scrambled per-person ID (never the email), cleared after about 60 days.</li>' +
           '<li><b>Admin</b> — PMs only: this page — this guide and staff bug reports.</li>' +
         '</ul>' +
 
@@ -5094,7 +5215,7 @@
 
         '<h2 class="pmg-h">Check that every link works</h2>' +
         '<p class="pmg-p">On the <b>Progress</b> tab, click <b>Check links</b> (in the coverage toolbar, just above the grid) to test every link. A link that won’t open — moved, deleted, or no access — is flagged as a <b>Link issue</b> (the red flag salespeople see on the Find tab); a folder with no files yet still counts as not linked. Neither counts toward a model’s progress. This check also runs <b>automatically every day</b>, so those flags show for everyone even when no one runs it — run it from Progress when you want to check right now. A file that was <b>renamed</b> on SharePoint is re-linked overnight by itself and shows as <b>Repaired</b> in To do for a day; a file that <b>moved</b> to another folder shows as <b>Moved</b> with a <b>Repair</b> button.</p>' +
-        '<p class="pmg-p">Two more states in the grid: a linked resource turns <b>Review</b> once its newest file is over a year old — open it, confirm it’s still current, or replace it. Mark a resource <b>N/A</b> (from a product section’s <b>Edit</b> view) when it genuinely doesn’t apply to that model — it’s then left out of the model’s progress instead of counting as missing.</p>' +
+        '<p class="pmg-p">Two more states in the grid: a linked resource turns <b>Review</b> once its newest file is over a year old — open it, then replace it, or save a new version in SharePoint; either one resets the date. Mark a resource <b>N/A</b> (from a product section’s <b>Edit</b> view) when it genuinely doesn’t apply to that model — it’s then left out of the model’s progress instead of counting as missing.</p>' +
       '</div>';
     return d;
   }
@@ -5182,7 +5303,7 @@
     try { input.focus(); } catch (e) {}
     input.addEventListener("input", function () { input.classList.remove("met-alias-bad"); input.removeAttribute("aria-invalid"); }); // clear the invalid state once they start correcting it
     row.querySelector(".met-alias-cancel").addEventListener("click", function () {
-      if (row._orig != null) { row.innerHTML = row._orig; var b = row.querySelector(".met-alias-btn"); if (b) b.addEventListener("click", function () { openAliasForm(row); }); }
+      if (row._orig != null) { row.innerHTML = row._orig; var b = row.querySelector(".met-alias-btn"); if (b) { b.addEventListener("click", function () { openAliasForm(row); }); b.focus(); } } // back on + Alias (F047)
     });
     row.querySelector(".met-alias-save").addEventListener("click", function () { saveAlias(row, q, input.value); });
     input.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); saveAlias(row, q, input.value); } else if (e.key === "Escape") { var c = row.querySelector(".met-alias-cancel"); if (c) c.click(); } });
@@ -5202,6 +5323,7 @@
     var saveDone = busyButton(saveBtn, "Saving…");
     apiFetch("/api/aliases", { method: "POST", body: { from: from, to: to } })
       .then(function (j) {
+        if (j && j.writtenAt) noteServerWrite(j.writtenAt); // F017
         var na = (j && j.alias) || PF.normAlias(from, to);
         if (na && !RUNTIME_ALIASES.some(function (a) { return a.from === na.from && a.to === na.to; })) RUNTIME_ALIASES.push(na); // apply now
         var focusLost = !document.activeElement || document.activeElement === document.body || document.activeElement === saveBtn; // the rewrite below destroys Save (F035)
@@ -5412,7 +5534,7 @@
   function renderMetrics() {
     // With no catalog every section below is false: "every model is fully linked", 0% for all 11 types (F009).
     if (catalogError) { content.innerHTML = catalogUnavailable("Product team", "Metrics"); syncViewTabs(); return; }
-    content.innerHTML = head("Product team", "Metrics", "How staff use the catalog — so you can improve search, prune dead links, and track adoption. The charts show aggregate counts only; the usage log behind them records who opened what and drops the identity after ~60 days.");
+    content.innerHTML = head("Product team", "Metrics", "How staff use the catalog — so you can improve search, prune dead links, and track adoption. The charts show aggregate counts only; behind them, opens and sign-ins are stored under a scrambled per-person ID (never the email), cleared after about 60 days.");
     var wrap = document.createElement("div"); wrap.className = "view";
     wrap.innerHTML =
       '<div class="met-section met-impact"><div class="met-h" role="heading" aria-level="2">Resource impact <small>coverage × adoption</small></div>' +
@@ -5456,7 +5578,13 @@
     usageInsights()
       .then(function (data) {
         fillResourceImpact(wrap, data);
-        function tile(name, v) { var el = wrap.querySelector('[data-tile="' + name + '"]'); if (el) el.textContent = (v == null ? "—" : v); }
+        // A failure count is not a success: red above zero, plain ink at zero; the green stays for counts that are good news
+        // (F045 of 11-03).
+        function tile(name, v) {
+          var el = wrap.querySelector('[data-tile="' + name + '"]'); if (!el) return;
+          el.textContent = (v == null ? "—" : v);
+          if (/fails$/.test(name)) { el.classList.toggle("met-num-bad", Number(v) > 0); el.classList.toggle("met-num-none", !(Number(v) > 0)); }
+        }
         tile("opens", data.opens); tile("people", data.activePeople); tile("signins", data.signins);
         // Weekly activity: two rows (opens, people), each on its own scale, counts printed (F163/F167).
         // shortWk stays here for the "last seen …" dates in the count lists below.
@@ -5830,7 +5958,7 @@
         if (typeof rep._onStatus === "function") rep._onStatus();  // refresh the "N reports · M open" line
       }, function () {
         dd.value = prev;              // put the control back where the data actually is
-      }).then(function () { dd.disabled = false; });
+      }).then(function () { dd.disabled = false; if (!document.activeElement || document.activeElement === document.body) dd.focus(); }); // disabling it dropped focus to <body> (F047 of 11-03)
     });
     statusWrap.appendChild(dd);
     // PM delete — permanently removes the report + its reporter PII. Two-step inline confirm (no native
@@ -5921,7 +6049,7 @@
           if (split) Object.keys(split.shared).forEach(function (type) {
             if (!p.models.some(function (m) { return usableLinked(m, type); })) return;
             var sfiles = split.shared[type].map(function (l) { return window.PF.fileNameOf(l.url); });
-            INDEX.push({ lvl: "Live", name: p.name + " — " + type, mono: false, path: [c.name, f.name, p.name], trail: c.name + " › " + f.name, live: true, url: split.shared[type][0].url, resource: type, sharedRow: f.name + "§" + p.name + "§" + type, extra: (p.models.join(" ") + " " + fileWords(sfiles)).trim(), files: sfiles });
+            INDEX.push({ lvl: "Live", name: p.name + " — " + type, mono: false, path: [c.name, f.name, p.name], trail: c.name + " › " + f.name, live: true, url: split.shared[type][0].url, resource: type, sharedRow: f.name + "§" + p.name + "§" + type, codeModels: p.models.slice(), extra: (p.models.join(" ") + " " + fileWords(sfiles)).trim(), files: sfiles });
           });
           p.models.forEach(function (m) {
             // Include the DECODED model-code words (e.g. "Hoardmaster 3000 G" → "Tall") in the searchable text, so
@@ -6153,6 +6281,9 @@
       // would race the event and could clear the guard first, letting our own write re-trigger a restore
       // (the loop this flag exists to prevent); 50ms is comfortably after delivery and still far below
       // any real user gesture.
+      // Closing a search (clear or Esc) replaces its #q= entry with the page it was typed on, whatever that page is: only
+      // the bare home did, so a search closed on a model, a family or Progress left the search one Back away (F066 of 11-03).
+      else if (dismiss && /^#q=/.test(cur)) { history.replaceState(null, "", location.pathname + location.search + (target || "")); }
       else if (target) { _internalHash = true; location.hash = target; setTimeout(function () { _internalHash = false; }, 50); }
       // Leaving ANY page (search results, a model, a product) for the bare home view keeps it one Back away:
       // a replace here erased the results (F128) and then the model page — Home, the Family breadcrumb and
@@ -6355,7 +6486,7 @@
     // Match every whitespace-separated token against the item name AND its path/trail, so
     // "Hoardmaster 400" or "hoard 3000x" finds the model even though the name alone is "Hoardmaster 3000X".
     var tokens = PF.searchTokens(query); // conversational cleanup + the same digit↔letter split queryStillUnmet uses
-    var hits = INDEX.filter(function (n) { return PF.searchMatch(tokens, n.name, (n.trail || "") + " " + (n.extra || ""), n.model || n.name); });
+    var hits = INDEX.filter(function (n) { return PF.searchMatch(tokens, n.name, (n.trail || "") + " " + (n.extra || ""), n.codeModels || n.model || n.name); });
     // One shared comparator (exact model typed → named resource → level → …; see PF.rankSearchHits) — the
     // old "files first, shortest label first" order put a sibling model's flyer above the exact model the
     // rep typed, and buried a family under 40 file rows.
@@ -6389,7 +6520,7 @@
     } else { clearTimeout(_missTimer); }
     var wrap = document.createElement("div"); wrap.className = "view";
     if (wasSearch) wrap.classList.add("no-anim");
-    var hitsAll = hits; hits = PF.collapseSharedHits(hits); // a facet keeps the models' own rows: the shared row has no code to filter on
+    var hitsAll = hits; hits = PF.collapseSharedHits(hits, tokens); // a facet keeps the models' own rows: the shared row has no code to filter on
     var srN = hits.length; // count announced to screen readers (post-filter when a facet is active)
     if (hits.length === 0) {
       wrap.innerHTML = '<h1 class="sr-head">No match for “' + escapeHtml(q) + '” yet. Try the product’s name or one word from it (e.g. “hoard”, “boulder”).</h1>' +
@@ -6852,8 +6983,36 @@
       if (!back || back === document.body || back.isConnected === false) back = typeof f.fallback === "function" ? f.fallback() : null;
       if (back && back.focus) { try { back.focus(); } catch (x) {} }
     }
-    return { open: open, close: close };
+    // WebKit hides everything outside an aria-modal dialog from VoiceOver, live regions included, so the page's own
+    // announcer and toast regions went silent under the preview, the bug and confirm dialogs (F056 of 11-03; the tour's
+    // box has had its own since F070). Each dialog gets a polite and an assertive region of its own, and what the page
+    // announces while one is open is said there too.
+    function liveIn(panel, assertive) {
+      var cls = assertive ? "modal-live-a" : "modal-live";
+      var r = panel.querySelector(":scope > ." + cls);
+      if (!r) { r = document.createElement("div"); r.className = "sr-only " + cls; r.setAttribute("aria-live", assertive ? "assertive" : "polite"); panel.appendChild(r); }
+      return r;
+    }
+    function say(text, assertive) {
+      var f = frames[frames.length - 1], t = String(text || "").replace(/\s+/g, " ").trim();
+      if (!f || !t) return;
+      var r = liveIn(f.panel, assertive);
+      r.textContent = ""; // the same words twice in a row are still said
+      setTimeout(function () { r.textContent = t; }, 30);
+    }
+    return { open: open, close: close, say: say };
   })();
+  // Echo the page's announcer and toast regions into the open dialog's own (a11yModal.say). Observed, not called from
+  // each of the ~13 announce sites and every toast, so a new one can't forget it.
+  if (window.MutationObserver) {
+    [[srAnnounce, false], [toastStatus, false], [toastAlerts, true], [document.getElementById("toastTopWrap"), false]].forEach(function (pair) {
+      var el = pair[0], assertive = pair[1]; if (!el) return;
+      new MutationObserver(function (muts) {
+        if (el === srAnnounce) { a11yModal.say(el.textContent, false); return; }
+        muts.forEach(function (m) { Array.prototype.forEach.call(m.addedNodes, function (n) { if (n.nodeType === 1) a11yModal.say(n.textContent, assertive); }); });
+      }).observe(el, el === srAnnounce ? { childList: true, characterData: true, subtree: true } : { childList: true });
+    });
+  }
   // ---- confirm dialog ----
   // Replaces window.confirm() for the destructive wire-tool actions. Native confirm is unstyled, ignores
   // the theme, cannot show structure (these messages carry a list of affected models), blocks the whole
@@ -6916,7 +7075,7 @@
   // so a call site keeps ONE code path instead of branching around the dialog.
   function pfConfirmIf(cond, opts) { return cond ? pfConfirm(opts) : Promise.resolve(true); }
 
-  function closePreview() { if (lb) { _lbDocTitle = null; setDocTitle(); _pvFromSearch = 0; if (_pvHref && _pvBase && location.href === _pvHref && _pvBase !== _pvHref) { try { history.replaceState(history.state, "", _pvBase); } catch (e) {} } /* closed without Back: the address returns too (F085) */ lb.hidden = true; document.body.classList.remove("preview-open"); lbSel.stop(); lbAbortInflight(); setDlBusy(false); setShareBusy(false); /* a hung download/share must not leave its button disabled into the NEXT preview */ var b = lb.querySelector(".lb-body"); b.innerHTML = ""; b.classList.remove("doc"); lbClearBlob(); galNav = null; setDownloadAll(null); clearCopyHint(); lbMoreClose(false); _lbBackRes = lbShare && lbShare.resource; /* the close below looks up the file row from this (F051) */ lbShare = null; lbFile = null; /* the next preview must not inherit them (F059) */ a11yModal.close(lb.querySelector(".lb-panel")); _lbBackRes = null; } }
+  function closePreview() { lbStartFile = null; /* a gallery that never read it (an error, an empty set) must not hand it on (F014) */ if (lb) { _lbDocTitle = null; setDocTitle(); _pvFromSearch = 0; if (_pvHref && _pvBase && location.href === _pvHref && _pvBase !== _pvHref) { try { history.replaceState(history.state, "", _pvBase); } catch (e) {} } /* closed without Back: the address returns too (F085) */ lb.hidden = true; document.body.classList.remove("preview-open"); lbSel.stop(); lbAbortInflight(); setDlBusy(false); setShareBusy(false); /* a hung download/share must not leave its button disabled into the NEXT preview */ var b = lb.querySelector(".lb-body"); b.innerHTML = ""; b.classList.remove("doc"); lbClearBlob(); galNav = null; setDownloadAll(null); clearCopyHint(); lbMoreClose(false); _lbBackRes = lbShare && lbShare.resource; /* the close below looks up the file row from this (F051) */ lbShare = null; lbFile = null; /* the next preview must not inherit them (F059) */ a11yModal.close(lb.querySelector(".lb-panel")); _lbBackRes = null; } }
   // Turn a technical fetch error (e.g. "Graph 503", "preview 500") into plain language for the staff-facing
   // preview UI. The raw message still goes to console.error for debugging — staff never see a bare HTTP code.
   // PM-facing version of friendlyErr: a server-authored 4xx message is shown as-is (escaped); transport
@@ -6998,6 +7157,9 @@
     // Nothing to download or send: both would fail and point at the same dead link. A Hub link to a missing file helps nobody either (F047).
     var gone = msg === ERR_COPY.gone; // the same sentence friendlyErr returns, never a match on its wording (F087 of 10-30)
     if (gone || msg === ERR_COPY.forbidden) { setDlReady(false); if (lbShareExtBtn) lbShareExtBtn.disabled = true; if (gone && lbCopyBtn) lbCopyBtn.disabled = true; }
+    // A missing file has nothing to share: the green Share opened a menu of greyed-out items (F052 of 11-03). A 403 keeps it,
+    // since the Hub link still helps a colleague who has access.
+    if (gone && lbShareBtn) { lbShareBtn.disabled = true; lbShareBtn.title = "Nothing to share — this file can’t be found"; }
     if (srAnnounce) srAnnounce.textContent = node._say; // focus stays on Close; a screen reader otherwise heard nothing (F116)
   }
   // A per-user 403/404 opening a WIRED file is invisible to the daily link-health cron (which checks
@@ -7033,8 +7195,9 @@
   // gallery's per-view loader and the Microsoft viewer's overlay, and wiped a working gallery (picks and all)
   // when the PM happened to page at the 15 s mark (F005). A newer open or a close bumps/hides lb, so a stale
   // watchdog no-ops.
-  function lbWatchdog(_seq, url) {
-    setTimeout(function () { if (lb._seq === _seq && !lb.hidden && lb.querySelector(".lb-body .lb-loading-init")) lbError(url, "This is taking a while to load. Try opening it in SharePoint."); }, 15000);
+  // A stall reads like every other slow load (ERR_COPY.slow) and offers Try again, which opens it afresh (F013 of 11-03).
+  function lbWatchdog(_seq, url, retry) {
+    setTimeout(function () { if (lb._seq === _seq && !lb.hidden && lb.querySelector(".lb-body .lb-loading-init")) lbError(url, ERR_COPY.slow, retry); }, 15000);
   }
   // Where focus goes when a preview closes and nothing opened it (a shared Hub link): the row of the file that was
   // showing, on the model card first, else the page content (F069).
@@ -7048,6 +7211,19 @@
   // A file opened from search results: the history length its preview entry will have (results, model, preview). A close
   // at that length goes back to the results; anything else closes to the model page as before (F033).
   var _pvFromSearch = 0;
+  // A gallery's address and its Copy link name the file on screen, as a file-level Hub link does (decision 1a): paging
+  // used to leave the address on the set, so a copied address bar or Copy link opened on file 1 (F067 of 11-03). Replaces
+  // the preview's own history entry, never pushes, and keeps _pvHref in step so syncHash still recognises it.
+  function lbFileHref(key) {
+    var base = lbShare && lbShare.productPath ? productResourceShareUrl(lbShare.productPath, lbShare.resource)
+      : (lbShare && lbShare.model && findModelPath(lbShare.model)) ? resourceShareUrl(lbShare.model, lbShare.resource) : null;
+    return base && key ? base + "/" + encodeURIComponent(key) : base;
+  }
+  function lbAddressFile(key) {
+    if (!key || !_pvHref || !(history.state && history.state.pfPreview) || location.href !== _pvHref) return;
+    var href = lbFileHref(key); if (!href || href === location.href) return;
+    try { history.replaceState(history.state, "", href); _pvHref = location.href; } catch (e) {}
+  }
   function previewHref(title) {
     if (!lbShare || !lbShare.resource || String(title || "").indexOf(lbShare.resource) === -1) return location.href;
     if (lbShare.productPath) return productResourceShareUrl(lbShare.productPath, lbShare.resource);
@@ -7055,6 +7231,7 @@
   }
   function lbBegin(title, fallbackTitle, openHref, loadingHtml) {
     if (lbShareExtBtn) lbShareExtBtn.disabled = false; if (lbCopyBtn) lbCopyBtn.disabled = false; // lbError may have turned them off for the last file (F047)
+    if (lbShareBtn) { lbShareBtn.disabled = false; lbShareBtn.title = "Share inside Grumbleton (a link) or with a customer (the file)"; } // and Share (F052)
     lbSel.stop(); lbSelCapNoted = false; lbGalKeys = null; lbGalEntries = null; // no picks carry into the next preview
     lbAbortInflight(); lbClearBlob(); // cancel a prior view's in-flight Office→PDF conversion + revoke its blob
     lb.querySelector(".lb-title").textContent = title || fallbackTitle; setLbUpdated(title);
@@ -7088,6 +7265,7 @@
     srAnnounce.textContent = (name ? name + " — " : "") + "preview ready";
   }
   function openPreview(url, title) {
+    lbStartFile = null; // a single file has no list to start in; left set, it named a file in the NEXT gallery (F014 of 11-03)
     if (!lb) { window.open(url, "_blank", "noopener"); return; }
     setDownloadAll(null); // single-file preview — no "Download all"
     // Open-in-SharePoint goes to the containing folder, not the bare file.
@@ -7096,8 +7274,8 @@
     // forever. After 15s, if this same open is still showing "Loading…", fall back to the error UI (which
     // offers "Open in SharePoint"). A newer open or a close bumps/hides lb, so a stale watchdog no-ops.
     var lbSig = lbFreshSignal(); // cancels any prior in-flight conversion; aborted on close/switch
-    lbWatchdog(_seq, url);
-    if (!window.PF_getToken) { lbError(url, "Please sign in again to preview files."); return; }
+    lbWatchdog(_seq, url, function () { openPreview(url, title); });
+    if (!window.PF_getToken) { lbError(url, ERR_COPY.auth); return; }
     lbFile = { name: null, downloadUrl: null, fileUrl: url }; setDlReady(true); // the SharePoint URL alone is enough for Download's recover path
     var bearer;
     var isImgUrl = /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|tiff?)(\?|#|$)/i.test(url);
@@ -7199,8 +7377,8 @@
     var _seq = lbBegin(title, rname || "Files", folderUrlOf(items[0].url), '<div class="lb-loading">Loading files…</div>'); // Open → the folder that holds the views
     // Loading watchdog (mirrors openPreview): if it's still spinning after 15s, surface a recovery path
     // rather than an eternal "Loading renders…" — field sales hit exactly the flaky networks this guards.
-    lbWatchdog(_seq, items[0].url);
-    if (!window.PF_getToken) { lbError(items[0].url, "Please sign in again to preview files."); return; }
+    lbWatchdog(_seq, items[0].url, function () { openGallery(items, title, rname); });
+    if (!window.PF_getToken) { lbError(items[0].url, ERR_COPY.auth); return; }
     var resolved = new Array(items.length);
     window.PF_getToken().then(function (token) {
       if (lb.hidden || lb._seq !== _seq) return;
@@ -7270,6 +7448,7 @@
     function stageErr(node) { setStage(node); if (srAnnounce) srAnnounce.textContent = node._say; }
     // Try again for a file whose lookup failed: look it up afresh and repaint its tile and the stage.
     var gseq = lb._seq;
+    var staleRetried = {}; // a file looked up again after its image failed, once per gallery (F081)
     function reResolve(i) {
       if (!window.PF_getToken) return;
       resolved[i] = undefined; update(i); // a pending tile and stage while it loads
@@ -7324,7 +7503,8 @@
       // not the individual view — so people land in the real folder location. Download still
       // grabs the specific file shown (lbFile below).
       var r = resolved[i], it = items[i];
-      lbFile = { name: (r && r.name) || it.label || null, downloadUrl: (r && r.full) || null, fileUrl: it.url }; setDlReady(true);
+      lbFile = { name: (r && r.name) || it.label || null, downloadUrl: (r && r.full) || null, fileUrl: it.url, galKey: galFileKey(it.url, i) }; setDlReady(true);
+      lbAddressFile(items.length > 1 ? lbFile.galKey : null);
       var isImg = (r && typeof r.isImage === "boolean") ? r.isImage : (it.isImage !== false);
       if (!r) { setStage(pendingNode()); } // still resolving: update(i) re-shows it the moment it lands (F111)
       else if (r && r.err) setStage(errNode(it.url, friendlyErr(r.err), canRetryErr(r.err) && function () { reResolve(i); }));
@@ -7333,7 +7513,13 @@
           var img = document.createElement("img"); img.alt = galName(i) || "Product view"; // the name the tile shows (F010); main content image — never leave alt empty
           // Guard like the doc branch: a late error from a PREVIOUS view's image must not paint over the view
           // the user has since paged to.
-          img.onerror = function () { if (idx !== i || lb.hidden) return; stageErr(errNode(it.url, "This view couldn’t be displayed.", function () { show(i); })); };
+          // The image addresses SharePoint handed out when the gallery opened expire (a locked phone, a long lunch): showing
+          // them again could never work. Look the file up again, once on its own, then from Try again (F081 of 11-03).
+          img.onerror = function () {
+            if (idx !== i || lb.hidden) return;
+            if (!staleRetried[i] && window.PF_getToken) { staleRetried[i] = 1; reResolve(i); return; }
+            stageErr(errNode(it.url, "This view couldn’t be displayed.", function () { reResolve(i); }));
+          };
           // Paint the strip's thumbnail at once (already cached), then swap in the screen-sized rendition when
           // it lands — the stage used to sit blank while a multi-MB original downloaded (F123/F210). If the
           // rendition fails, the original is the fallback.
@@ -7472,6 +7658,25 @@
         if (typeof orig !== "function") return;
         r[k] = function () { return orig.apply(r, arguments).then(function (v) { clearTimeout(t); return v; }, function (e) { clearTimeout(t); timedOut(e); }); };
       });
+      // A FILE body (a download, a share) counts the budget from the last bytes that arrived, not from the headers: a
+      // 30 s total cut a large render off mid-stream on a slow phone link while bytes were still coming (F015 of 11-03).
+      // API reads (json/text) keep the total budget above.
+      if (r.body && typeof r.body.getReader === "function") {
+        var asBlob = function () {
+          var reader = r.body.getReader(), chunks = [], type = (r.headers && r.headers.get("content-type")) || "";
+          function pump() {
+            return reader.read().then(function (x) {
+              clearTimeout(t);
+              if (x.done) return new Blob(chunks, { type: type });
+              chunks.push(x.value); t = setTimeout(function () { ctrl.abort(); }, budget);
+              return pump();
+            });
+          }
+          return pump().catch(function (e) { clearTimeout(t); timedOut(e); });
+        };
+        r.blob = asBlob;
+        r.arrayBuffer = function () { return asBlob().then(function (b) { return b.arrayBuffer(); }); };
+      }
       return r;
     }, function (e) { clearTimeout(t); timedOut(e); });
   }
@@ -7518,10 +7723,10 @@
   function openRenders(folderUrl, model, title, rname) {
     if (!lb) { window.open(folderUrl, "_blank", "noopener"); return; }
     var _seq = lbBegin(title, rname || "Files", folderUrl, '<div class="lb-loading">Loading files…</div>');
-    if (!window.PF_getToken) { lbError(folderUrl, "Please sign in again to preview files."); return; }
+    if (!window.PF_getToken) { lbError(folderUrl, ERR_COPY.auth); return; }
     // The same 15s watchdog every other opener has. Without it a stalled token or Graph call left
     // "Loading renders…" on screen indefinitely, with no way out but closing the modal.
-    lbWatchdog(_seq, folderUrl);
+    lbWatchdog(_seq, folderUrl, function () { openRenders(folderUrl, model, title, rname); });
     window.PF_getToken().then(function (token) {
       return listFolderRenders(folderUrl, model, "Bearer " + token);
     }).then(function (items) {
@@ -7545,8 +7750,8 @@
     var folderHref = (arr.filter(function (a) { return looksLikeFolder(a.url); })[0] || {}).url || folderUrlOf(arr[0].url);
     var _seq = lbBegin(title, rname || "Files", folderHref, '<div class="lb-loading">Loading files…</div>');
     // Loading watchdog (mirrors openPreview/openGallery): recover from a hung resolve instead of spinning forever.
-    lbWatchdog(_seq, arr[0].url);
-    if (!window.PF_getToken) { lbError(arr[0].url, "Please sign in again to preview files."); return; }
+    lbWatchdog(_seq, arr[0].url, function () { openMixedGallery(arr, title, model, rname); });
+    if (!window.PF_getToken) { lbError(arr[0].url, ERR_COPY.auth); return; }
     var failures = []; // folders that wouldn't list (F042)
     window.PF_getToken().then(function (token) {
       var bearer = "Bearer " + token;
@@ -7578,12 +7783,16 @@
   }
   // One entry point for opening a resource: folder → live render gallery, many files → gallery, one file → preview.
   // A mix of folder(s) + file(s) routes to openMixedGallery, which expands the folder(s) into the same gallery.
+  var lbOpened = null; // the last openResource call: a cancelled Flag reopens the same set, not just its one file (F016 of 11-03)
   function openResource(arr, title, model, opts) {
     if (!arr || !arr.length) return;
     // remember what the lightbox is showing so its "Copy link" button can build a deep link
     var rname = (title && title.indexOf("·") !== -1) ? title.split("·").pop().trim() : null;
     lbShare = { model: model, resource: rname, productPath: (opts && opts.productPath) || null };
-    window.PF_logEvent && window.PF_logEvent("resource_open", model ? (model + (rname ? " · " + rname : "")) : (title || ""));
+    lbOpened = { arr: arr, title: title, model: model, opts: opts }; // how to open it again, set by set (F016)
+    // The tour's own open (step 5) is not a rep finding a file: logged as tour_open, which Metrics never counts as an open
+    // but which says how many reps reached the file steps (F046 of 11-03, decision 7b).
+    window.PF_logEvent && window.PF_logEvent(tourState ? "tour_open" : "resource_open", model ? (model + (rname ? " · " + rname : "")) : (title || ""));
     if (arr.length === 1 && looksLikeFolder(arr[0].url)) openRenders(arr[0].url, model, title, rname);
     else if (arr.length > 1) { if (arr.some(function (a) { return looksLikeFolder(a.url); })) openMixedGallery(arr, title, model, rname); else openGallery(arr, title, rname); }
     else openPreview(arr[0].url, title);
@@ -7662,6 +7871,13 @@
     // order entirely, which would make the tabs unreachable by keyboard while scrolled down.)
     if (topbar) topbar.addEventListener("focusin", show);
   })();
+  // When the installed app's pull-to-refresh must not reload: a preview, a dialog or the tour is up, a PM has unsaved edits
+  // (the browser's leave prompt does not show in the installed app), or the pull starts on a control. Named at the top
+  // level so a test runs the decision, not its text (F073 of 11-03).
+  function ptrBlocked(target) {
+    return !!(tourState || (lb && !lb.hidden) || document.body.classList.contains("preview-open") || pmHasStagedEdits() || _pfoldSaving ||
+      (target && target.closest && target.closest(".lb, .docp, .bugm, .pfc, .wire-menu, .tour-pop, .gal-strip, input, textarea, select")));
+  }
   // Pull down at the top to reload (owner, 2026-11-02). A phone browser tab does this itself; the installed Hub app (iOS
   // and Android standalone) has no such gesture, so only there, on a touch screen. Never over a preview, a dialog or the
   // tour, and never with unsaved edits: the browser's leave prompt does not show in the installed app.
@@ -7671,10 +7887,7 @@
     if (!installed || !(mm && mm("(pointer: coarse)").matches)) return;
     var ARM = 70, el = null, startY = null, pull = 0, armed = false;
     function atTop() { return (window.scrollY || document.documentElement.scrollTop || 0) <= 0; }
-    function blocked(target) {
-      return !!(tourState || (lb && !lb.hidden) || document.body.classList.contains("preview-open") || pmHasStagedEdits() || _pfoldSaving ||
-        (target && target.closest && target.closest(".lb, .docp, .bugm, .pfc, .wire-menu, .tour-pop, .gal-strip, input, textarea, select")));
-    }
+    var blocked = ptrBlocked;
     function paint() {
       if (!el) { el = document.createElement("div"); el.className = "ptr"; el.setAttribute("aria-hidden", "true"); el.innerHTML = svg('<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>') + '<span class="ptr-label"></span>'; document.body.appendChild(el); }
       el.style.setProperty("--ptr-pull", Math.round(pull) + "px");
@@ -7911,8 +8124,8 @@
         }, function () { showError('<span>Couldn’t copy — try again.</span>'); });
         return;
       }
-      var url = lbShare && lbShare.productPath ? productResourceShareUrl(lbShare.productPath, lbShare.resource)
-        : (lbShare && lbShare.model) ? resourceShareUrl(lbShare.model, lbShare.resource) : location.href;
+      var url = (galNav && lbFile && lbFile.galKey && lbFileHref(lbFile.galKey)) || (lbShare && lbShare.productPath ? productResourceShareUrl(lbShare.productPath, lbShare.resource)
+        : (lbShare && lbShare.model) ? resourceShareUrl(lbShare.model, lbShare.resource) : location.href); // the file on screen in a gallery (F067)
       // Both copy methods can fail (a locked-down clipboard, an iframe policy) — it used to end silently (F218).
       function copyFailed() { showError(LINKICON + '<span>Couldn’t copy the link — copy it from here: <a href="' + escapeAttr(url) + '">' + escapeHtml(url) + '</a></span>', 12000); }
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -7959,6 +8172,10 @@
     // A Share near the bottom of the screen opened its menu below the fold, so the tap looked dead and a second tap closed
     // it (F056/F039). Open upward when it fits under the top bar, otherwise scroll it on screen.
     var vh = window.innerHeight, trigger = menu.parentNode && menu.parentNode.getBoundingClientRect ? menu.parentNode.getBoundingClientRect() : null;
+    // Toasts sit over the bottom of the screen and take taps: a menu opened into them lost the tap on its item to the
+    // toast, and the menu closed (F049 of 11-03). With toasts up, the screen ends where they begin.
+    var tw = window.document && window.document.getElementById && window.document.getElementById("toastWrap");
+    if (vh && tw && tw.querySelector && tw.querySelector(".toast")) vh = Math.min(vh, tw.getBoundingClientRect().top);
     if (vh && r.bottom > vh - 4) {
       var bar = window.document && window.document.querySelector(".topbar"), barBottom = bar ? bar.getBoundingClientRect().bottom : 0;
       if (trigger && trigger.top - r.height - 6 >= barBottom + 4) menu.classList.add("menu-up");
@@ -8412,7 +8629,8 @@
       // The tap's activation lapsed while the files downloaded. They are kept now (see shareCache), so the
       // next tap opens the sheet at once — say exactly that, and let the button say it too (F023/F029).
       onLapsed();
-      showError('<span>The share window needs a fresh click once the files are ready — and they are ready now. Choose <b>Share › External</b> again and it opens at once.</span>', 10000);
+      // A step working as designed, not a failure: the neutral toast, one idea, the word the device uses (F065 of 11-03).
+      showToast(svg(ICONS.check) + '<span><b>Your files are ready.</b> ' + (shareTouch ? "Tap" : "Click") + ' <b>Share › External</b> again to send them.</span>', 10000);
       return;
     }
     logShare(false, label, 0, (err && err.name) || "error");
@@ -8715,12 +8933,19 @@
   function openBug(prefill, resourceUrl, flag) {
     if (!bugModal) return;
     bugResourceUrl = resourceUrl || null;
-    // "Flag as outdated" gets its own heading, question and context line, and no machine marker in the rep's own text (F064).
+    // "Flag this file" gets its own heading, question and context line, and no machine marker in the rep's own text (F064).
     bugFlag = flag || null;
     bugOnClose = (flag && flag.onClose) || null; // a flag reopens its file when the box closes unsent (F032 of 10-30)
     var bt = document.getElementById("bugmTitle"), bl = bugModal.querySelector(".bugm-label");
     if (bt) bt.textContent = bugFlag ? "Flag this file" : "Report a problem";
     if (bl) bl.textContent = bugFlag ? "What’s outdated or wrong?" : "What went wrong?";
+    // The lead and the example under it follow too: a flag opened with the bug report's "Found something broken…" and an
+    // example about a different model (F054 of 11-03). The report's own words are kept to put back.
+    var lead = bugModal.querySelector(".bugm-lead");
+    if (lead && bugModal._lead == null) bugModal._lead = lead.textContent;
+    if (bugModal._ph == null) bugModal._ph = bugText.placeholder;
+    if (lead) lead.textContent = bugFlag ? "Tell the product team what’s outdated or wrong with this file." : bugModal._lead;
+    bugText.placeholder = bugFlag ? "e.g. The dimensions changed, or this is last year’s version…" : bugModal._ph;
     // Restore an unsent draft rather than wiping it. A backdrop mis-click used to discard a long report
     // silently, and reopening started from blank. An explicit prefill (the "report this file" path) wins.
     // A leftover "[Content flag] …" marker is a flag the user abandoned, not a report in progress — a
@@ -8739,7 +8964,7 @@
   // sheet, admin inbox) with a [Content flag] marker + the model·resource prefilled, so sales staff can
   // surface stale content without new infrastructure.
   var lbFlagBtn = document.getElementById("lbFlagBtn");
-  if (lbFlagBtn) lbFlagBtn.innerHTML = FLAGICON + '<span>Flag as outdated</span>';
+  if (lbFlagBtn) lbFlagBtn.innerHTML = FLAGICON + '<span>Flag this file</span>'; // one name across the menu, the dialog and the tour (F053, decision 4a)
   if (lbFlagBtn) lbFlagBtn.addEventListener("click", function () { flagPreview(""); });
   function flagPreview(prefill) {
     var pr = previewingResource(); // capture BEFORE closing the preview — previewingResource() reads the open lightbox
@@ -8747,9 +8972,14 @@
     var rurl = pr ? resourceShareUrl(pr.model, pr.resource) : null;
     var file = pr ? pr.resource + " · " + pr.model : title;
     // Cancel or Esc brings the file back, as Manage placements does (F032 of 10-30); a sent flag ends on the thanks toast.
-    var fileUrl = (lbFile && lbFile.fileUrl) || null, keepShare = lbShare;
+    // A gallery comes back as the gallery, on the same file: openPreview built one file, with no strip, Download (N) or
+    // Select, under the whole set's title (F016 of 11-03).
+    var fileUrl = (lbFile && lbFile.fileUrl) || null, keepShare = lbShare, again = lbOpened, startKey = lbFile && lbFile.galKey;
     closePreview();
-    openBug(prefill, rurl, { title: title, file: file, onClose: fileUrl ? function () { lbShare = keepShare; openPreview(fileUrl, title); } : null });
+    openBug(prefill, rurl, { title: title, file: file, onClose: fileUrl ? function () {
+      if (again && startKey) { lbStartFile = startKey; openResource(again.arr, again.title, again.model, again.opts); return; }
+      lbShare = keepShare; openPreview(fileUrl, title);
+    } : null });
   }
   // PM-only "Manage placements": open the document panel for the file currently in the preview. Revealed
   // for PMs once /api/me confirms status (see below). Derive the file + resource DIRECTLY from the live
@@ -8796,7 +9026,7 @@
         // Was silent: focus just returned to the textarea with no message, so a screen-reader user
         // believed the report sent. role="alert" announces it; aria-invalid marks the field.
         bugText.setAttribute("aria-invalid", "true");
-        if (bugErr) bugErr.textContent = "Please describe what went wrong before sending.";
+        if (bugErr) bugErr.textContent = bugFlag ? "Please say what’s outdated or wrong before sending." : "Please describe what went wrong before sending.";
         bugText.focus();
         return;
       }

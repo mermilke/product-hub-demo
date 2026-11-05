@@ -204,6 +204,7 @@
   /* Stats, not cards: bordered boxes made three numbers compete with the chart and lists beneath them. */
   .met-tile { flex: 1 1 150px; background: none; border: 0; border-radius: 0; padding: var(--sp-8) var(--sp-16) var(--sp-8) 0; }
   .met-num { font-family: var(--font-mono); font-size: var(--fs-34); font-weight: 700; line-height: 1; color: var(--ok-ink); } /* matches the app's hero-number convention (.cov-big) */
+  .met-num.met-num-bad { color: var(--accent-ink); } .met-num.met-num-none { color: var(--ink); } /* failure tiles (F045) */
   .met-tlabel { font-size: var(--fs-13); font-weight: 600; color: var(--ink); margin-top: var(--sp-6); }
   .met-tsub { font-size: var(--fs-11); color: var(--ink-faint); margin-top: var(--sp-1); }
   .met-list { list-style: none; padding: 0; margin: 0; }
@@ -368,8 +369,10 @@
   .model-key > summary { list-style: none; cursor: pointer; font-family: var(--font-label); font-size: var(--fs-10); letter-spacing: var(--ls-label-sm); text-transform: uppercase; color: var(--ink-faint); padding: var(--sp-8) var(--sp-9); display: flex; align-items: center; gap: 6px; }
   .model-key > summary:hover { color: var(--ink-soft); }
   .model-key > summary::-webkit-details-marker { display: none; }
-  .model-key > summary::before { content: "+"; font-family: var(--font-mono); width: 9px; display: inline-block; }
-  .model-key[open] > summary::before { content: "\2013"; }
+  /* One expand mark everywhere: the To-do boxes' chevron, pointing right when closed and down when open. The help, the PM
+     guide and this key had a text ▸ (left, right) and a +/– (F042 of 11-03). */
+  .model-key > summary::before { content: ""; flex: none; width: 7px; height: 7px; border-right: 2px solid var(--ink-faint); border-bottom: 2px solid var(--ink-faint); transform: rotate(-45deg); transition: transform .15s; margin-right: 2px; }
+  .model-key[open] > summary::before { transform: rotate(45deg); }
   .model-key dl { margin: 0; padding: 0 var(--sp-9) var(--sp-8); display: grid; grid-template-columns: auto 1fr; column-gap: var(--sp-8); row-gap: 3px; }
   .model-key dl > div { display: contents; }
   .model-key dt { font-family: var(--font-mono); font-weight: 600; color: var(--ok-ink); font-size: var(--fs-12); }
@@ -426,8 +429,10 @@
   .ci-chev svg { width: 16px; height: 16px; }
   .col-item.sel .ci-chev { color: var(--ink); }
   .col-empty { padding: var(--sp-20) var(--sp-16); font-size: var(--fs-13); color: var(--ink-faint); line-height: 1.6; }
-  .col-item.flash { animation: itemFlash 1s ease; }
-  @keyframes itemFlash { 0%,100% { background: transparent; } 30% { background: var(--ok-tint); } }
+  /* From and back to the row's own fill: fixed transparent ends hid the selected row's grey for a second, then snapped it
+     back (F040 of 11-03). */
+  .col-item.flash { animation: itemFlash .6s ease; }
+  @keyframes itemFlash { 30% { background: var(--ok-tint); } }
   .mdot { width: 5px; height: 5px; border-radius: 50%; background: var(--line-strong); }
   .okdot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
   .soon-tag { font-family: var(--font-label); font-size: var(--fs-11); letter-spacing: var(--ls-label); text-transform: uppercase; font-weight: 600; color: var(--pending); }
@@ -558,8 +563,8 @@
   .wire-help { margin: var(--sp-8) 0 0; }
   .wire-help summary { display: inline-flex; align-items: center; gap: var(--sp-7); cursor: pointer; font-size: var(--fs-12-5); font-weight: 600; color: var(--ok-ink); list-style: none; width: fit-content; user-select: none; }
   .wire-help summary::-webkit-details-marker { display: none; }
-  .wire-help summary::before { content: "▸"; font-size: var(--fs-10); color: var(--ink-faint); transition: transform .15s; }
-  .wire-help[open] summary::before { transform: rotate(90deg); }
+  .wire-help summary::before { content: ""; flex: none; width: 7px; height: 7px; border-right: 2px solid var(--ink-faint); border-bottom: 2px solid var(--ink-faint); transform: rotate(-45deg); transition: transform .15s; }
+  .wire-help[open] summary::before { transform: rotate(45deg); }
   .wire-help summary:hover { color: var(--ink); }
   .wire-help-body { margin: var(--sp-10) 0 var(--sp-2); }
   .wire-help-steps { margin: 0 0 var(--sp-10); padding-left: var(--sp-20); font-size: var(--fs-12-5); color: var(--ink-soft); line-height: 1.75; max-width: 38em; }
@@ -569,8 +574,8 @@
   .pm-guide > summary { display: flex; align-items: center; gap: var(--sp-8); cursor: pointer; list-style: none; padding: var(--sp-16) var(--sp-18); font-weight: 700; font-size: var(--fs-15); user-select: none; }
   .pm-guide > summary::-webkit-details-marker { display: none; }
   .pm-guide > summary svg { width: 18px; height: 18px; color: var(--ok-ink); }
-  .pm-guide > summary::after { content: "▸"; margin-left: auto; color: var(--ink-faint); font-size: var(--fs-12); transition: transform .15s; }
-  .pm-guide[open] > summary::after { transform: rotate(90deg); }
+  .pm-guide > summary::after { content: ""; flex: none; width: 7px; height: 7px; border-right: 2px solid var(--ink-faint); border-bottom: 2px solid var(--ink-faint); transform: rotate(-45deg); transition: transform .15s; margin-left: auto; margin-right: 4px; }
+  .pm-guide[open] > summary::after { transform: rotate(45deg); }
   .pmg-body { padding: 0 var(--sp-18) var(--sp-16); }
   .pmg-body > .wire-lead { margin-top: 0; }
   .pmg-h { margin: var(--sp-16) 0 var(--sp-6); font-size: var(--fs-12-5); font-weight: 700; color: var(--ink); text-transform: uppercase; letter-spacing: .04em; }
@@ -585,6 +590,11 @@
   .wire-sel { appearance: none; -webkit-appearance: none; -moz-appearance: none; padding-right: var(--sp-34);
     background-image: var(--select-arrow);
     background-repeat: no-repeat; background-position: right 12px center; background-size: 12px; }
+  /* Search's Sort and the Metrics alias select take the same arrow as Admin's (decision 12a); search's keeps its chip
+     size. They had the browser's own arrow, most visible in dark mode (F044 of 11-03). */
+  .ft-sort-sel, .met-alias-sel { appearance: none; -webkit-appearance: none; -moz-appearance: none; background-image: var(--select-arrow); background-repeat: no-repeat; }
+  select.ft-sort-sel { padding-right: var(--sp-24); background-position: right 8px center; background-size: 10px; }
+  select.met-alias-sel { padding-right: var(--sp-28); background-position: right 10px center; background-size: 11px; }
   .wire-input { flex: 1 1 260px; min-width: 200px; }
   .wire-sel:focus, .wire-input:focus { border-color: var(--focus-ring); box-shadow: 0 0 0 2px var(--focus-ring); }
   .wire-btn { font-family: var(--font-ui); font-size: var(--fs-13); font-weight: 600; border-radius: var(--r-ctl); padding: var(--sp-9) var(--sp-16); cursor: pointer; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-soft); transition: color .15s, border-color .15s; }

@@ -131,7 +131,9 @@
     // ("People with existing access": …/:f:/r/sites/S/Docs/Renders?csf=1&web=1) is the real path behind a
     // marker. Drop the marker so the long form and the plain path are ONE identity — two spellings of a
     // shared folder used to count as two dedicated folders and switch model filtering off.
-    var shareShort = !!share && /\/:[a-z]:\/s\//i.test(path);
+    // Every share form but the long /r/ one is short: a OneDrive (/:b:/g/personal/…) or group-site (/:f:/g/…) link was read
+    // as a path, so its opaque id became a fake folder and identity (F020 of 11-03).
+    var shareShort = !!share && !/\/:[a-z]:\/r\//i.test(path);
     if (share && !shareShort) path = path.replace(/\/:[a-z]:\/[a-z](?=\/)/i, "");
     // ".../Forms/AllItems.aspx?id=%2Fsites%2FX%2FDocs%2FRenders&viewid=..." is what copying the address bar
     // gives you while looking at a folder: the folder it shows is in the query.
@@ -291,11 +293,16 @@
             // The file the tour opens (owner, 2026-11-02): something to flip through. A set of pictures with several files (or a
             // folder) first, then any set with several, then a picture, then the first linked file. openShared: it sits on the
             // product card, not the model card.
+            // A set is judged on the card the tour opens (F019): a type with 1 shared file and 2 of the model's own counted as a
+            // set of 3 but opened the 1-file product-card row. Each type opens on the card holding more of its files.
+            var own = split.perModel[m0] || {};
+            var weight = function (a) { return a.some(function (l) { return looksLikeFolder(l.url); }) ? Infinity : a.length; };
+            var cardOf = function (r) { var s = split.shared[r] || [], o = own[r] || []; return s.length && weight(s) >= weight(o) ? s : o; };
             var linked = function (r) { return (linksFor(m0, r) || []).length > 0 && !isNA(m0, r); };
-            var several = function (r) { var a = linksFor(m0, r) || []; return linked(r) && (a.length > 1 || a.some(function (l) { return looksLikeFolder(l.url); })); };
+            var several = function (r) { var a = cardOf(r); return linked(r) && (a.length > 1 || a.some(function (l) { return looksLikeFolder(l.url); })); };
             var pics = ["Renders", "In-Store Images"];
             var openRes = pics.filter(several)[0] || RESOURCES.filter(several)[0] || pics.filter(linked)[0] || RESOURCES.filter(linked)[0] || null;
-            best.openRes = openRes; best.openShared = !!(openRes && split.shared[openRes]);
+            best.openRes = openRes; best.openShared = !!(openRes && split.shared[openRes] && cardOf(openRes) === split.shared[openRes]);
             if (mine) chosen = best;
           }
         });
@@ -574,6 +581,10 @@
   function searchMatch(tokens, name, rest, codeSource) {
     var nm = String(name || "").toLowerCase();
     var hay = glueHyphens((nm + " " + String(rest || "")).toLowerCase());
+    // codeSource may be a LIST of model names (a product-wide file's row, F083 of 11-03): a code fits when one model has it.
+    // Read against the row's label instead, W matched "Warranty" and T "Training", so a variant that doesn't exist
+    // got a confident answer.
+    var codes = Array.isArray(codeSource) ? codeSource.map(function (m) { return String(m || "").toLowerCase(); }) : null;
     var code = String(codeSource == null ? name : codeSource || "").toLowerCase();
     var matched = 0;
     for (var i = 0; i < (tokens || []).length; i++) {
@@ -583,7 +594,7 @@
       // the roller shelf, and "it" alone (a substring of "Little") is not a search. A miss on any MEANINGFUL
       // word still rules the row out: "Hoardmaster plinth" must not match the Gondola row.
       if (FILLER[t]) continue;
-      var ok = isCodeToken(t, tokens) ? codeMatches(t, code) : /^[0-9]{3,}$/.test(t) ? numIn(hay, t) : termIn(hay, t);
+      var ok = isCodeToken(t, tokens) ? (codes ? codes.some(function (m) { return codeMatches(t, m); }) : codeMatches(t, code)) : /^[0-9]{3,}$/.test(t) ? numIn(hay, t) : termIn(hay, t);
       if (!ok) return false;
       matched++;
     }
@@ -772,11 +783,15 @@
     // Only a query plainly about a coded model (F104): a line or a whole number typed, and a coded model among the hits.
     // A one-letter shorthand beside a descriptive name ("Hoardmaster w plinth") is not a code that no model has.
     if (!tokens.some(function (t) { return LINE_PREFIX[t] || /^[0-9]{3,}$/.test(t); })) return false;
-    if (!hits.some(function (n) { return modelCodes(n.model || n.name); })) return false;
+    if (!hits.some(function (n) { return (n.codeModels || [n.model || n.name]).some(modelCodes); })) return false;
     var tset = {}; tokens.forEach(function (t) { tset[String(t).toLowerCase()] = 1; });
+    // A product-wide file's row answers exactly only when one of its product's models is named exactly (F083 of 11-03).
     return !hits.some(function (n) {
       if (n.lvl !== "Model" && !n.live) return false;
-      var model = String(n.model || n.name || ""), words = tokenizeQuery(model), have = modelCodes(model);
+      return (n.codeModels || [n.model || n.name || ""]).some(exactFor);
+    });
+    function exactFor(m) {
+      var model = String(m || ""), words = tokenizeQuery(model), have = modelCodes(model);
       var fits = tokens.every(function (t) { return !isCodeToken(t, tokens) || codeMatches(t, model); });
       if (!have) return fits && words.every(function (w) { return tset[w]; });
       // A coded model is named exactly by its number and its codes: the line prefix may be left out ("400 i", "hoard 3000x"),
@@ -785,7 +800,7 @@
       tokens.forEach(function (t) { if (isCodeToken(t, tokens) && !/^[0-9]+$/.test(t)) (parseCodeRun(t) || []).forEach(function (c) { typed[c] = 1; }); });
       var otherLine = tokens.some(function (t) { return LINE_PREFIX[t] && words.indexOf(t) === -1; });
       return fits && !otherLine && words.every(function (w) { return !/^[0-9]+$/.test(w) || tset[w]; }) && have.every(function (c) { return typed[c]; });
-    });
+    }
   }
   function rankSearchHits(hits, tokens) {
     var tset = {};
@@ -852,10 +867,23 @@
   }
   // One search row per shared file (decision 10a, F077). A model's own row for a file every model shares goes when the query
   // also found the product's shared row. A query naming one model's code ("hoardmaster 3000 x flyer") finds only that model's row, so it stays.
-  function collapseSharedHits(hits) {
-    var found = {};
-    (hits || []).forEach(function (n) { if (n.sharedRow) found[n.sharedRow] = 1; });
-    return (hits || []).filter(function (n) { return !(n.sharedOf && found[n.sharedOf]); });
+  // One row per shared file: the product's own row when it was found, else the first of the per-model rows that carry the
+  // same file (hits arrive ranked). A coded query ("hoardmaster 3000 x warranty") rarely finds the product row, and listed the
+  // identical file once per sibling that has the code (F084 of 11-03).
+  // A query that names a model in full ("hoardmaster 3000 x flyer") still lands on that model's own row, and the product's
+  // row for the same file steps aside (10a: one row per shared file, the model's when it was named).
+  function collapseSharedHits(hits, tokens) {
+    var tset = {}; (tokens || []).forEach(function (t) { tset[String(t).toLowerCase()] = 1; });
+    var named = function (n) { var w = tokenizeQuery(String(n.model || "")); return !!(tokens && tokens.length && w.length && w.every(function (x) { return tset[x]; })); };
+    var found = {}, exact = {}, kept = {};
+    (hits || []).forEach(function (n) { if (n.sharedRow) found[n.sharedRow] = 1; if (n.sharedOf && named(n)) exact[n.sharedOf] = 1; });
+    return (hits || []).filter(function (n) {
+      if (n.sharedRow) return !exact[n.sharedRow];
+      if (!n.sharedOf) return true;
+      if (exact[n.sharedOf]) return named(n);
+      if (found[n.sharedOf] || kept[n.sharedOf]) return false;
+      kept[n.sharedOf] = 1; return true;
+    });
   }
   function mergeFavorites(local, server, removed) {
     // `removed` = models the user un-pinned whose delete-write may not have reached the server yet. Without
